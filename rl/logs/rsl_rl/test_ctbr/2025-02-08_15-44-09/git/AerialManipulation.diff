@@ -1,0 +1,346 @@
+--- git status ---
+On branch master
+Your branch is up to date with 'origin/master'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   envs/crazyflie_ctatt/quadrotor_env.py
+	modified:   plotting/hover_error_plot.pdf
+	modified:   plotting/hover_error_plot.png
+	modified:   plotting/model_ablations.png
+	modified:   sandbox.py
+	modified:   utils/make_plots.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	com_ablation_circle_fast.png
+	com_ablation_circle_slow.png
+	combined_curve.png
+	database_gc_tuning.sqlite3
+	demo_gc.py
+	eval_rollout.png
+	example.sqlite3
+	gc_shape_no_grav.png
+	lissajous_curve.png
+	outputs/
+	plotting/background_img.png
+	plotting/example_frame.png
+	plotting/example_traj_track.png
+	plotting/example_traj_track.svg
+	plotting/frame_extracts/
+	plotting/model_ablations.pdf
+	plotting/model_ablations_double_column.pdf
+	plotting/model_ablations_double_column.png
+	plotting/model_ablations_single_column.pdf
+	plotting/model_ablations_single_column.png
+	plotting/model_ablations_v2.pdf
+	plotting/model_ablations_v2.png
+	plotting/model_ablations_v3.pdf
+	plotting/model_ablations_v3.png
+	plotting/model_components.png
+	plotting/trajectory_tracking.pdf
+	plotting/trajectory_tracking.png
+	polynomial_curve.png
+	pos_buffer.pt
+	position_error_top_trials.png
+	position_error_vs_velocity.png
+	position_error_vs_velocity_comparison.png
+	position_error_vs_velocity_components.png
+	position_error_vs_velocity_gc_circle_fast.png
+	position_error_vs_velocity_gc_circle_slow.png
+	position_error_vs_velocity_gc_lissajous.png
+	ref_pos_buffer.pt
+	rl/baseline_0dof_ee_reward_tune/
+	rl/baseline_0dof_ee_reward_tune_no_ff_hover/
+	rl/baseline_0dof_ee_reward_tune_no_ff_traj/
+	rl/baseline_0dof_ee_reward_tune_pid_hover/
+	rl/baseline_0dof_ee_reward_tune_pid_traj/
+	rl/baseline_0dof_ee_reward_tune_with_ff/
+	rl/baseline_0dof_ee_reward_tune_with_ff_hover/
+	rl/baseline_0dof_ee_reward_tune_with_ff_traj/
+	rl/baseline_0dof_hand_tuned/
+	rl/baseline_0dof_hand_tuned_with_ff/
+	rl/baseline_0dof_long_arm_com_middle_tuned/
+	rl/baseline_0dof_small_arm_com_ee_tuned/
+	rl/baseline_0dof_small_arm_com_middle_tuned/
+	rl/baseline_0dof_small_arm_com_v_tuned/
+	rl/baseline_cf_0dof/
+	rl/baseline_quad_only_reward_tune/
+	rl/eval_plot.png
+	s_buffer.pt
+	s_des_buffer.pt
+	s_dot_buffer.pt
+	s_dot_des_buffer.pt
+	traj_data.png
+	traj_errors.png
+	traj_errors_3d_lissajous.png
+	traj_errors_3d_lissajous_poly_yaw.png
+	traj_errors_3d_lissajous_poly_yaw_fast.png
+	traj_errors_3d_lissajous_poly_yaw_very_fast.png
+	traj_errors_4d_lissajous.png
+	traj_errors_4d_lissajous_fast_yaw.png
+	traj_errors_4d_lissajous_fast_yaw_freq_6.png
+	traj_errors_4d_lissajous_fast_yaw_freq_6_amp_6.png
+	traj_errors_4d_lissajous_long_arm.png
+	traj_errors_4d_lissajous_ood.png
+	traj_errors_circle_fast.png
+	traj_errors_circle_slow.png
+	traj_errors_circle_slow_tangent.png
+	traj_errors_long_circle_fast.png
+	traj_errors_long_circle_slow.png
+	traj_errors_old_4d_lissajous.png
+	traj_xy.png
+	traj_xy_4d_lissajous.png
+	traj_xy_4d_lissajous_ood.png
+	traj_xy_circle_fast.png
+	traj_xy_circle_slow.png
+	traj_xy_long_4d_lissajous.png
+	traj_xy_long_circle_fast.png
+	traj_xy_long_circle_slow.png
+	utils/case_study.png
+
+no changes added to commit (use "git add" and/or "git commit -a") 
+
+
+--- git diff ---
+diff --git a/envs/crazyflie_ctatt/quadrotor_env.py b/envs/crazyflie_ctatt/quadrotor_env.py
+index fb31f47..81b8868 100644
+--- a/envs/crazyflie_ctatt/quadrotor_env.py
++++ b/envs/crazyflie_ctatt/quadrotor_env.py
+@@ -115,7 +115,7 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
+     attitude_scale_xy = 0.2
+     has_end_effector = False
+ 
+-    control_mode = "CTATT" # "CTBM" or "CTATT"
++    control_mode = "CTATT" # "CTBM" or "CTATT" or "CTBR"
+     pd_loop_decimation = sim_rate_hz // pd_loop_rate_hz # decimation from sim physics rate
+ 
+     # reward scales
+@@ -164,6 +164,12 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
+     kp_att = 1575 # 544
+     kd_att = 229.93 # 46.64
+ 
++    # CTBR Parameters
++    kp_omega = 1 # default taken from RotorPy, needs to be checked on hardware. 
++    kd_omega = 0.1 # default taken from RotorPy, needs to be checked on hardware.
++    body_rate_scale_xy = 10.0
++    body_rate_scale_z = 2.5
++
+     # Domain Randomization
+     dr_dict = {}
+ 
+@@ -224,6 +230,7 @@ class QuadrotorEnv(DirectRLEnv):
+         self._thrust_to_weight = self.cfg.thrust_to_weight * torch.ones(self.num_envs, device=self.device)
+         self._hover_thrust = 2.0 / self.cfg.thrust_to_weight - 1.0
+         self._nominal_action = torch.tensor([self._hover_thrust, 0.0, 0.0, 0.0], device=self.device).tile((self.num_envs, 1))
++        self._previous_omega_err = torch.zeros(self.num_envs, 3, device=self.device)
+ 
+         # Things necessary for motor dynamics
+         r2o2 = math.sqrt(2.0) / 2.0
+@@ -386,6 +393,19 @@ class QuadrotorEnv(DirectRLEnv):
+         cmd_moment = torch.bmm(self.inertia_tensor, att_pd.unsqueeze(2)).squeeze(2) + \
+                     torch.cross(self._robot.data.root_ang_vel_b, I_omega, dim=1) 
+         return cmd_moment
++    
++    def _get_moment_from_ctbr(self, actions):
++        omega_des = torch.zeros(self.num_envs, 3, device=self.device)
++        omega_des[:, :2] = self.cfg.body_rate_scale_xy * actions[:, 1:3]
++        omega_des[:, 2] = self.cfg.body_rate_scale_z * actions[:, 3]
++        
++        omega_err = self._robot.data.root_ang_vel_b - omega_des
++        omega_dot_err = (omega_err - self._previous_omega_err) / self.cfg.pd_loop_rate_hz
++        omega_dot = self.cfg.kp_omega * omega_err + self.cfg.kd_omega * omega_dot_err
++        self._previous_omega_err = omega_err
++
++        cmd_moment = torch.bmm(self.inertia_tensor, omega_dot.unsqueeze(2)).squeeze(2)
++        return cmd_moment
+ 
+     def _pre_physics_step(self, actions: torch.Tensor):
+         self._actions = actions.clone().clamp(-1.0, 1.0)
+@@ -401,6 +421,14 @@ class QuadrotorEnv(DirectRLEnv):
+             
+             # compute wrench from desired attitude and current attitude using PD controller
+             self._wrench_des[:,1:] = self._get_moment_from_ctatt(self._actions)
++        elif self.cfg.control_mode == "CTBR":
++            # 0th action is collective thrust
++            # 1st and 2nd action are desired body rates for pitch and roll
++            # 3rd action is desired yaw rate
++            self._wrench_des[:, 0] = ((self._actions[:, 0] + 1.0) / 2.0) * (self._robot_weight * self._thrust_to_weight)
++            
++            # compute wrench from desired body rates and current body rates using PD controller
++            self._wrench_des[:,1:] = self._get_moment_from_ctbr(self._actions)
+             
+         else:
+             raise NotImplementedError(f"Control mode {self.cfg.control_mode} is not implemented.")
+@@ -412,8 +440,12 @@ class QuadrotorEnv(DirectRLEnv):
+ 
+     def _apply_action(self):
+         # Update PD loop at a lower rate
+-        if self.pd_loop_counter % self.cfg.pd_loop_decimation == 0 and self.cfg.control_mode == "CTATT":
+-            self._wrench_des[:,1:] = self._get_moment_from_ctatt(self._actions)
++        if self.pd_loop_counter % self.cfg.pd_loop_decimation == 0:
++            if self.cfg.control_mode == "CTATT":
++                self._wrench_des[:,1:] = self._get_moment_from_ctatt(self._actions)
++            elif self.cfg.control_mode == "CTBR":
++                self._wrench_des[:,1:] = self._get_moment_from_ctbr(self._actions)
++
+             self._motor_speeds_des = self._compute_motor_speeds(self._wrench_des)
+         self.pd_loop_counter += 1
+         # print("--------------------")
+@@ -442,8 +474,8 @@ class QuadrotorEnv(DirectRLEnv):
+         # print("[Isaac Env: Curriculum] Total Timesteps: ", total_timesteps, " Pos Radius: ", self.cfg.pos_radius)
+         if self.cfg.pos_radius_curriculum > 0:
+             # half the pos radius every pos_radius_curriculum timesteps
+-            self.cfg.pos_radius = 0.8 * (0.25 ** (total_timesteps // self.cfg.pos_radius_curriculum))
+-            # self.cfg.pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
++            # self.cfg.pos_radius = 0.8 * (0.25 ** (total_timesteps // self.cfg.pos_radius_curriculum))
++            self.cfg.pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
+ 
+     def _get_observations(self) -> dict:
+         self._apply_curriculum(self.common_step_counter * self.num_envs)
+@@ -600,36 +632,36 @@ class QuadrotorEnv(DirectRLEnv):
+         else:
+             time_scale = 1.0
+ 
+-        # rewards = {
+-        #     "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * time_scale,
+-        #     "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * time_scale,
+-        #     "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale,
+-        #     "pos_error": distance_to_goal * self.cfg.pos_error_reward_scale * time_scale,
+-        #     "yaw_error": ori_error * self.cfg.yaw_error_reward_scale * time_scale,
+-        #     "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale,
+-        #     "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale,
+-        #     "action_norm": action_norm_error * self.cfg.action_norm_reward_scale * time_scale,
+-        #     "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
+-        #     "stay_alive": torch.ones_like(distance_to_goal) * self.cfg.stay_alive_reward * time_scale,
+-        # }
+-        # for key, value in rewards.items():
+-        #     print(key, value.shape)
+-
+         rewards = {
+-            "lin_vel": lin_vel_penalty,
+-            "ang_vel": ang_vel_penalty,
+-            "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale * 0,
+-            "pos_error": pos_penalty,
+-            "yaw_error": ori_penalty,
+-            "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale * 0,
+-            "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale * 0,
+-            "action_norm": action_penalty,
++            "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * time_scale,
++            "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * time_scale,
++            "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale,
++            "pos_error": distance_to_goal * self.cfg.pos_error_reward_scale * time_scale,
++            "yaw_error": ori_error * self.cfg.yaw_error_reward_scale * time_scale,
++            "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale,
++            "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale,
++            "action_norm": action_norm_error * self.cfg.action_norm_reward_scale * time_scale,
+             "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
+             "stay_alive": torch.ones_like(distance_to_goal) * self.cfg.stay_alive_reward * time_scale,
+         }
+         # for key, value in rewards.items():
+         #     print(key, value.shape)
+ 
++        # rewards = {
++        #     "lin_vel": lin_vel_penalty,
++        #     "ang_vel": ang_vel_penalty,
++        #     "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale * 0,
++        #     "pos_error": pos_penalty,
++        #     "yaw_error": ori_penalty,
++        #     "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale * 0,
++        #     "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale * 0,
++        #     "action_norm": action_penalty,
++        #     "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
++        #     "stay_alive": torch.ones_like(distance_to_goal) * self.cfg.stay_alive_reward * time_scale,
++        # }
++        # for key, value in rewards.items():
++        #     print(key, value.shape)
++
+         ## names have to match above
+         # rewards = {
+         #     "lin_vel" : state_penalty,
+@@ -683,7 +715,11 @@ class QuadrotorEnv(DirectRLEnv):
+         elif self.cfg.eval_mode:
+             self.episode_length_buf[env_ids] = 0
+ 
++
+         self._actions[env_ids] = 0.0
++        self._previous_action[env_ids] = 0.0
++        self._previous_omega_err[env_ids] = 0.0
++        
+         # Sample new commands
+         if self.cfg.goal_cfg == "rand":
+             self._desired_pos_w[env_ids, :2] = torch.zeros_like(self._desired_pos_w[env_ids, :2]).uniform_(-2.0, 2.0)
+diff --git a/plotting/hover_error_plot.pdf b/plotting/hover_error_plot.pdf
+index 1ffba3b..76d343d 100644
+Binary files a/plotting/hover_error_plot.pdf and b/plotting/hover_error_plot.pdf differ
+diff --git a/plotting/hover_error_plot.png b/plotting/hover_error_plot.png
+index e9c20c9..927edf4 100644
+Binary files a/plotting/hover_error_plot.png and b/plotting/hover_error_plot.png differ
+diff --git a/plotting/model_ablations.png b/plotting/model_ablations.png
+index 3e54db2..acf9558 100644
+Binary files a/plotting/model_ablations.png and b/plotting/model_ablations.png differ
+diff --git a/sandbox.py b/sandbox.py
+index 13d270c..f058d75 100644
+--- a/sandbox.py
++++ b/sandbox.py
+@@ -1104,6 +1104,34 @@ def check_circle_trajs():
+ 
+     plt.show()
+ 
++def check_catch_time(vel=None):
++    import numpy as np
++    z_crossing = 0.5
++    g = 9.81
++    pos_init = 2.0
++    if vel is not None:
++        t = (vel +  np.sqrt(vel**2 + 2*g*(pos_init - z_crossing))) / g
++        return t
++    else:
++        for vel_init in [2.0, 4.0, 6.5, 9.0]:
++            t = (vel_init +  np.sqrt(vel_init**2 + 2*g*(pos_init - z_crossing))) / g
++            print("Vel_init: ", vel_init, " time to catch: ", t)
++
++def eval_ball_catch():
++    gc_path = "./rl/baseline_0dof_ee_reward_tune/"
++    rl_path = "./rl/logs/rsl_rl/PaperModels_Hover/2025-01-21_17-44-46_Hover_ee_traj_env_fixed_init/"
++
++    for vel in ['2', '4', '9']:
++        gc_rewards = torch.load(gc_path + "ball_catching_vel_" + vel + "_ball_catch_eval_rewards.pt", weights_only=True)
++        rl_rewards = torch.load(rl_path + "ball_catching_vel_" + vel + "_ball_catch_eval_rewards.pt", weights_only=True)
++
++        print("----------------")
++        print("Vel: ", vel)
++        print("Time: ", check_catch_time(float(vel)))
++        print("GC: ", (gc_rewards.sum(dim=1)/5.0).mean().item(), (gc_rewards.sum(dim=1)/5.0).std().item())
++        print("RL: ", (rl_rewards.sum(dim=1)/5.0).mean().item(), (rl_rewards.sum(dim=1)/5.0).std().item())
++        print()
++
+ 
+ 
+ if __name__ == "__main__":
+@@ -1116,7 +1144,10 @@ if __name__ == "__main__":
+     # investigate_lissajous_vs_circle()
+     # check_COM_ablation()
+ 
+-    check_circle_trajs()
++    # check_circle_trajs()
++
++    check_catch_time()
++    eval_ball_catch()
+ 
+     # check_finite_difference()
+     # check_gc_shape()
+\ No newline at end of file
+diff --git a/utils/make_plots.py b/utils/make_plots.py
+index c5e22b1..921b69b 100644
+--- a/utils/make_plots.py
++++ b/utils/make_plots.py
+@@ -18,7 +18,6 @@ sns.set_context("paper")
+ sns.set_theme()
+ 
+ import omni.isaac.lab.utils.math as isaac_math_utils
+-
+ import math_utilities as math_utils
+ 
+ def plot_data(rl_eval_path, dc_eval_path=None, save_prefix=""):
