@@ -75,8 +75,10 @@ Two demonstration files are available to investigate the model/physics.
 2. `demo_env.py`: A script used to launch an IsaacSim window from the `gymnasium` api. 
 
 # Environments
+1. `Isaac-Crazyflie-Hover-v0`: Environment to simulate a crazyflie in hovering tasks.
 
 # Training
+See more details in `./rl/`
 
 # Tools
 <details>

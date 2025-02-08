@@ -7,18 +7,18 @@
 #SBATCH --qos=dj-med
 #SBATCH --output=./slurm_outputs/%j.out
 
-TASK="Isaac-CrazyflieManipulatorLong-SRT-Hover-v0"
-EXPERIMENT="CrazyflieManipulator_CTATT"
+TASK="Isaac-Crazyflie-Hover-v0"
+EXPERIMENT="Crazyflie_CTBR"
 RUN_NAME="sbatch_test"
 NUM_STEPS=4096
 AGENT_STEPS=64
 SEED=0
 
 
-source /home/pratikk/.bashrc
+source ~/.bashrc
 eval "$(conda shell.bash hook)"
 conda activate isaaclab
 python train_rslrl.py --task $TASK --num_steps $NUM_STEPS agent.num_steps_per_env=$AGENT_STEPS \
-	--seed $SEED --experiment_name $EXPERIMENT --run_name $RUN_NAME \
+	--seed $SEED --experiment_name $EXPERIMENT --run_name $RUN_NAME env.control_mode="CTBR"\
 
 

@@ -11,6 +11,9 @@ Example training script for CTBR (works out of the box in sim2real):
 python train_rslrl.py --task Isaac-Crazyflie-Hover-v0 --num_envs 4096 agent.num_steps_per_env=64 --experiment_name test_ctbr env.control_mode="CTBR" 
 ```
 
+
+Example training script for SLURM is provided in `run_job.bash`. Partition name, QOS, etc. may need to be changed. 
+
 # Evaluating Policies
 The script `eval_rslrl.py` is used to evaluate pre-trained policies and baseline GC implementations. 
 - The task must be specified with `--task {TASK_NAME}`
