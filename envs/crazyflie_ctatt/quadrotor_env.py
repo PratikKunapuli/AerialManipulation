@@ -171,7 +171,7 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
 
     # Domain Randomization
     dr_dict = {}
-    
+
 
 class QuadrotorEnv(DirectRLEnv):
     cfg: QuadrotorEnvCfg
@@ -270,6 +270,7 @@ class QuadrotorEnv(DirectRLEnv):
 
         ## INTRODUCED FIXES TO GET THE SRT HOVER EXAMPLE TO WORK
         else:
+            self._ee_id = self._robot.find_bodies("body")[0]
             quad_pos = self._robot.data.body_pos_w[0, self._body_id]
             quad_ori = self._robot.data.body_quat_w[0, self._body_id]
             self.body_pos_ee_frame, self.body_ori_ee_frame = subtract_frame_transforms(quad_pos, quad_ori, quad_pos, quad_ori)
