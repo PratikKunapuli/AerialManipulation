@@ -115,6 +115,9 @@ class DecoupledController():
             self.attitude_scale_z = torch.pi
             self.attitude_scale_xy = 0.2
 
+            self.body_rate_scale_xy = 10.0
+            self.body_rate_scale_z = 2.5
+
         self.device = torch.device(device)
         self.inertia_tensor.to(self.device)
         
@@ -528,6 +531,12 @@ class DecoupledController():
 
             return collective_thrust, att_des
         
+        elif self.control_mode == "CTBR":
+            # We already have collective thrust, we need to compute the desired body rates
+            br_des = omega_err
+
+            return collective_thrust, br_des
+        
         else:
             raise NotImplementedError("Control mode not implemented!")
 
@@ -667,7 +676,11 @@ class DecoupledController():
             # u2 = M_des[:, 0].view(batch_size, 1)
             # u3 = M_des[:, 1].view(batch_size, 1)
             # u4 = M_des[:, 2].view(batch_size, 1)
-
+        elif self.control_mode == "CTBR":
+            u1 = self.rescale_command(collective_thrust, 0.0, self.thrust_to_weight * 9.81*self.mass).view(batch_size, 1)
+            u2 = self.rescale_command(M_des[:, 0], -self.body_rate_scale_xy, self.body_rate_scale_xy).view(batch_size, 1)
+            u3 = self.rescale_command(M_des[:, 1], -self.body_rate_scale_xy, self.body_rate_scale_xy).view(batch_size, 1)
+            u4 = self.rescale_command(M_des[:, 2], -self.body_rate_scale_z, self.body_rate_scale_z).view(batch_size, 1)
         # import code; code.interact(local=locals())
 
         return torch.stack([u1, u2, u3, u4], dim=1).view(batch_size, 4)
