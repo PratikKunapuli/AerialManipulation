@@ -442,8 +442,8 @@ class QuadrotorEnv(DirectRLEnv):
         # print("[Isaac Env: Curriculum] Total Timesteps: ", total_timesteps, " Pos Radius: ", self.cfg.pos_radius)
         if self.cfg.pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.cfg.pos_radius = 0.8 * (0.25 ** (total_timesteps // self.cfg.pos_radius_curriculum))
-            # self.cfg.pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
+            # self.cfg.pos_radius = 0.8 * (0.25 ** (total_timesteps // self.cfg.pos_radius_curriculum))
+            self.cfg.pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
 
     def _get_observations(self) -> dict:
         self._apply_curriculum(self.common_step_counter * self.num_envs)
@@ -600,33 +600,33 @@ class QuadrotorEnv(DirectRLEnv):
         else:
             time_scale = 1.0
 
-        # rewards = {
-        #     "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * time_scale,
-        #     "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * time_scale,
-        #     "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale,
-        #     "pos_error": distance_to_goal * self.cfg.pos_error_reward_scale * time_scale,
-        #     "yaw_error": ori_error * self.cfg.yaw_error_reward_scale * time_scale,
-        #     "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale,
-        #     "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale,
-        #     "action_norm": action_norm_error * self.cfg.action_norm_reward_scale * time_scale,
-        #     "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
-        #     "stay_alive": torch.ones_like(distance_to_goal) * self.cfg.stay_alive_reward * time_scale,
-        # }
-        # for key, value in rewards.items():
-        #     print(key, value.shape)
-
         rewards = {
-            "lin_vel": lin_vel_penalty,
-            "ang_vel": ang_vel_penalty,
-            "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale * 0,
-            "pos_error": pos_penalty,
-            "yaw_error": ori_penalty,
-            "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale * 0,
-            "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale * 0,
-            "action_norm": action_penalty,
+            "lin_vel": lin_vel * self.cfg.lin_vel_reward_scale * time_scale,
+            "ang_vel": ang_vel * self.cfg.ang_vel_reward_scale * time_scale,
+            "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale,
+            "pos_error": distance_to_goal * self.cfg.pos_error_reward_scale * time_scale,
+            "yaw_error": ori_error * self.cfg.yaw_error_reward_scale * time_scale,
+            "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale,
+            "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale,
+            "action_norm": action_norm_error * self.cfg.action_norm_reward_scale * time_scale,
             "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
             "stay_alive": torch.ones_like(distance_to_goal) * self.cfg.stay_alive_reward * time_scale,
         }
+        # for key, value in rewards.items():
+        #     print(key, value.shape)
+
+        # rewards = {
+        #     "lin_vel": lin_vel_penalty,
+        #     "ang_vel": ang_vel_penalty,
+        #     "pos_distance": distance_to_goal_mapped * self.cfg.pos_distance_reward_scale * time_scale * 0,
+        #     "pos_error": pos_penalty,
+        #     "yaw_error": ori_penalty,
+        #     "previous_thrust": action_thrust_error * self.cfg.previous_thrust_reward_scale * time_scale * 0,
+        #     "previous_attitude": action_att_error * self.cfg.previous_attitude_reward_scale * time_scale * 0,
+        #     "action_norm": action_penalty,
+        #     "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
+        #     "stay_alive": torch.ones_like(distance_to_goal) * self.cfg.stay_alive_reward * time_scale,
+        # }
         # for key, value in rewards.items():
         #     print(key, value.shape)
 
