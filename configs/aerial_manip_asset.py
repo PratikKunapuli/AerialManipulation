@@ -62,7 +62,7 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         # usd_path=f"{MODELS_PATH}/aerial_manipulator_2dof.usd",
         # usd_path=f"{MODELS_PATH}/uam_2dof.usd",
-        usd_path=f"{MODELS_PATH}/uam_2dof_intertia.usd",
+        usd_path=f"{MODELS_PATH}/uam_2dof_inertia.usd",
 
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
