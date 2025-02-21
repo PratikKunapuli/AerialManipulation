@@ -160,7 +160,8 @@ class AerialManipulator2DOFHoverEnvCfg(AerialManipulatorHoverEnvBaseCfg):
     num_joints = 2
     num_observations = 16
     # 3(vel) + 3(ang vel) + 3(pos) + 3(ori) + 2(joint pos) + 2(joint vel) = 16
-    
+    action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(6,))
+
     # robot
     robot: ArticulationCfg = AERIAL_MANIPULATOR_2DOF_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
@@ -174,6 +175,7 @@ class AerialManipulator2DOFHoverPoseEnvCfg(AerialManipulatorHoverEnvBaseCfg):
     num_actions = 6
     num_joints = 2
     num_observations = 22
+    action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(6,))
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) + 2(joint pos) + 2(joint vel) = 22
     
     # robot
@@ -301,6 +303,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Actions / Actuation interfaces
         self._actions = torch.zeros(self.num_envs, self.cfg.num_actions, device=self.device)
+        print("actions shape:", self._actions.shape)
         self._joint_torques = torch.zeros(self.num_envs, self._robot.num_joints, device=self.device)
         self._body_forces = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._body_moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
@@ -360,9 +363,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         self._com_id = self._robot.find_bodies("COM")[0]
         
         if self.cfg.num_joints > 0:
-            self._shoulder_joint_idx = self._robot.find_joints(".*joint1")[0][0]
+            self._shoulder_joint_idx = self._robot.find_joints("joint_shoulder")[0][0]
         if self.cfg.num_joints > 1:
-            self._wrist_joint_idx = self._robot.find_joints(".*joint2")[0][0]
+            self._wrist_joint_idx = self._robot.find_joints("joint_wrist")[0][0]
         self._total_mass = self._robot.root_physx_view.get_masses()[0].sum()
         self.total_mass = self._total_mass
         self.quad_inertia = self._robot.root_physx_view.get_inertias()[0, self._body_id, :].view(-1, 3, 3).squeeze()
@@ -424,8 +427,12 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        self._actions = actions.clone().clamp(-1.0, 1.0) # clamp the actions to [-1, 1]
+        # print(self._actions.shape)
 
+        ## TEMPORARY FIX
+        # print('actions shape:',  actions.shape)
+        self._actions = actions.clone().clamp(-1.0, 1.0) # clamp the actions to [-1, 1]
+        # print(self._actions.shape)
         # Need to compute joint torques, body forces, and body moments
         # TODO: Implement pre-physics step
 
@@ -442,7 +449,11 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # print("Body Forces: ", self._body_forces)
         # print("Body Moments: ", self._body_moment)
+        # print(self.cfg.num_actions)
         if self.cfg.num_joints > 0:
+            # print(self._shoulder_joint_idx)
+            # print(self.cfg)
+            # print(self._actions.shape)
             self._joint_torques[:, self._shoulder_joint_idx] = self._actions[:, 4] * self.cfg.shoulder_torque_scalar
         if self.cfg.num_joints > 1:
             self._joint_torques[:, self._wrist_joint_idx] = self._actions[:, 5] * self.cfg.wrist_torque_scalar
