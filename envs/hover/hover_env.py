@@ -101,14 +101,18 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     # reward scales
     pos_radius = 0.8
     pos_radius_curriculum = 0 # 10e6
+    ori_radius = 0.5
+    ori_radius_curriculum = int(1e7)
     lin_vel_reward_scale = -0.05 # -0.05
     ang_vel_reward_scale = -0.01 # -0.01
     pos_distance_reward_scale = 15.0 #15.0
+    ori_distance_reward_scale = 15.0
     pos_error_reward_scale = 0.0# -1.0
-    ori_error_reward_scale = 0.0 # -0.5
+    ori_error_reward_scale = -2.0 # -0.5
     joint_vel_reward_scale = 0.0 # -0.01
-    action_norm_reward_scale = 0.0 # -0.01
-    yaw_error_reward_scale = -2.0 # -0.01
+    action_prop_norm_reward_scale = 0.0 # -0.01
+    action_joint_norm_reward_scale = 0.0
+    yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
     yaw_radius = 0.2 
     yaw_smooth_transition_scale = 0.0
@@ -322,11 +326,13 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 "endeffector_ang_vel",
                 "endeffector_pos_error",
                 "endeffector_pos_distance",
+                "endeffector_ori_distance",
                 "endeffector_ori_error",
                 "endeffector_yaw_error",
                 "endeffector_yaw_distance",
                 "joint_vel",
-                "action_norm",
+                "action_norm_prop",
+                "action_norm_joint",
                 "stay_alive",
                 "crash_penalty"
             ]
@@ -344,7 +350,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 "lin_vel",
                 "ang_vel",
                 "joint_vel",
-                "action_norm",
+                "action_norm_prop",
+                "action_norm_joint",
                 "stay_alive",
                 "crash_penalty"
             ]
@@ -480,6 +487,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         if self.cfg.pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
             self.cfg.pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
+        if self.cfg.ori_radius_curriculum > 0:
+            self.cfg.ori_radius = 0.5 * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum))
 
     def _get_observations(self) -> torch.Dict[str, torch.Tensor | torch.Dict[str, torch.Tensor]]:
         """
@@ -625,6 +634,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             pos_distance = torch.exp(- (pos_error) / self.cfg.pos_radius)
 
         ori_error = quat_error_magnitude(goal_ori_w, base_ori_w)
+
+        ori_distance = torch.exp(-(ori_error ** 2) / self.cfg.ori_radius)
         
         goal_yaw_w = yaw_quat(goal_ori_w)
         current_yaw_w = yaw_quat(base_ori_w)
@@ -667,7 +678,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         joint_vel_error = torch.norm(self._robot.data.joint_vel, dim=1)
 
         # action_error = torch.sum(torch.square(self._actions), dim=1) 
-        action_error = torch.norm(self._actions, dim=1)
+        action_prop_error = torch.norm(self._actions[:, :4], dim=1)
+        action_joint_error = torch.norm(self._actions[:, -2:], dim=1)
 
         if self.cfg.scale_reward_with_time:
             time_scale = 1.0 / self.cfg.policy_rate_hz
@@ -694,13 +706,15 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             "endeffector_pos_error": pos_error * self.cfg.pos_error_reward_scale * time_scale,
             "endeffector_pos_distance": pos_distance * self.cfg.pos_distance_reward_scale * time_scale,
             "endeffector_ori_error": ori_error * self.cfg.ori_error_reward_scale * time_scale,
+            "endeffector_ori_distance": ori_distance * self.cfg.ori_distance_reward_scale * time_scale,
             "endeffector_yaw_error": yaw_error * self.arm_length * self.cfg.yaw_error_reward_scale * time_scale,
             "endeffector_yaw_distance": yaw_distance * self.cfg.yaw_distance_reward_scale * time_scale,
             "endeffector_lin_vel": lin_vel_error * self.cfg.lin_vel_reward_scale * time_scale,
             "endeffector_ang_vel": ang_vel_error * self.arm_length * self.cfg.ang_vel_reward_scale * time_scale,
             # "joint_vel": joint_vel_error * self.cfg.joint_vel_reward_scale * time_scale,
             "joint_vel": combined_distance * self.cfg.joint_vel_reward_scale * time_scale,
-            "action_norm": action_error * self.cfg.action_norm_reward_scale * time_scale,
+            "action_norm_prop": action_prop_error * self.cfg.action_prop_norm_reward_scale * time_scale,
+            "action_norm_joint": action_joint_error * self.cfg.action_joint_norm_reward_scale * time_scale,
             "stay_alive": torch.ones_like(pos_error) * self.cfg.stay_alive_reward * time_scale,
             "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
         }
@@ -714,7 +728,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             "lin_vel": lin_vel_error,
             "ang_vel": ang_vel_error,
             "joint_vel": joint_vel_error,
-            "action_norm": action_error,
+            "action_norm_prop": action_prop_error,
+            "action_norm_joint": action_joint_error,
             "stay_alive": torch.ones_like(pos_error),
             "crash_penalty": self.reset_terminated[:].float(),
         }
