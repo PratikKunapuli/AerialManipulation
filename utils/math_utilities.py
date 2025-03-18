@@ -50,6 +50,36 @@ def yaw_from_quat(q: torch.Tensor) -> torch.Tensor:
     # yaw3 = torch.atan2(2.0 * (q[:, 1] * q[:, 0] + q[:, 2] * q[:, 3]), 1.0 - 2.0*(q[:,0]**2 + q[:,1]**2))
     return yaw.reshape(shape[:-1])
 
+def body_yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
+    '''
+    compute the yaw error of the body for the 2DOF case
+    q1 = body quaternion
+    q2 = goal quaternion
+    '''
+    shape1 = q1.shape
+    shape2 = q2.shape
+
+    q1 = q1.reshape(-1, 4)
+    q2 = q2.reshape(-1, 4)
+
+    
+    #Find vector "b2" that is the y-axis of the rotated frame
+    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q2.device).tile((q2.shape[0], 1)))
+
+    # perform z-correction on goal orientations that have at least one nonzero horizontal (x or y) component
+    has_x = torch.nonzero(b2[:, 0])
+    has_y = torch.nonzero(b2[:, 1])
+    has_horiz = torch.cat((has_x, has_y)).unique()
+    b2[has_horiz, 2] = 0.0
+    b2 = torch.nn.functional.normalize(b2, dim=1)
+
+    dots =(b1*b2).sum(dim=1)
+    dots = torch.reshape(dots, (-1, 1))
+    rewards = torch.zeros_like(dots)
+    rewards[has_horiz] = torch.ones_like(dots[has_horiz]) - dots[has_horiz] ** 2
+    return rewards
+
 def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.Tensor:
     """Get yaw error between two quaternions.
 

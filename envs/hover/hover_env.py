@@ -23,7 +23,7 @@ import numpy as np
 # Local imports
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_2DOF_CFG, AERIAL_MANIPULATOR_1DOF_CFG, AERIAL_MANIPULATOR_1DOF_WRIST_CFG, AERIAL_MANIPULATOR_0DOF_CFG, AERIAL_MANIPULATOR_0DOF_DEBUG_CFG
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_0DOF_SMALL_ARM_COM_V_CFG, AERIAL_MANIPULATOR_0DOF_SMALL_ARM_COM_MIDDLE_CFG, AERIAL_MANIPULATOR_0DOF_SMALL_ARM_COM_EE_CFG
-from utils.math_utilities import yaw_from_quat, yaw_error_from_quats, quat_from_yaw, compute_desired_pose_from_transform
+from utils.math_utilities import * #yaw_from_quat, yaw_error_from_quats, quat_from_yaw, compute_desired_pose_from_transform
 
 class AerialManipulatorEnvWindow(BaseEnvWindow):
     """Window manager for the Quadcopter environment."""
@@ -100,9 +100,9 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     # reward scales
     pos_radius = 0.8
-    pos_radius_curriculum = 0 # 10e6
-    ori_radius = 0.5
-    ori_radius_curriculum = int(1e7)
+    pos_radius_curriculum = int(1e7) # 10e6
+    ori_radius = 0.8
+    ori_radius_curriculum = int(1e6)
     lin_vel_reward_scale = -0.05 # -0.05
     ang_vel_reward_scale = -0.01 # -0.01
     pos_distance_reward_scale = 15.0 #15.0
@@ -110,7 +110,7 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     pos_error_reward_scale = 0.0# -1.0
     ori_error_reward_scale = -2.0 # -0.5
     joint_vel_reward_scale = 0.0 # -0.01
-    action_prop_norm_reward_scale = 0.0 # -0.01
+    action_prop_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
@@ -645,11 +645,16 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         smooth_transition_func = 1.0 - torch.exp(-1.0 / torch.max(self.cfg.yaw_smooth_transition_scale*pos_error - 10.0, torch.zeros_like(pos_error)))
 
         # other_yaw_error = yaw_error_from_quats(goal_yaw_w, current_yaw_w, self.cfg.num_joints).unsqueeze(1)
-        yaw_error = yaw_error_from_quats(goal_ori_w, base_ori_w, self.cfg.num_joints).unsqueeze(1)
-        # other_yaw_error = torch.sum(torch.square(other_yaw_error), dim=1)
-        yaw_error = torch.linalg.norm(yaw_error, dim=1)
+        if self.cfg.num_joints != 2:
+            yaw_error = yaw_error_from_quats(goal_ori_w, base_ori_w, self.cfg.num_joints).unsqueeze(1)
+            # other_yaw_error = torch.sum(torch.square(other_yaw_error), dim=1)
+        
+        else:
+            _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
+            yaw_error = body_yaw_error_from_quats(body_ori_w, goal_ori_w)
 
-        # yaw_distance = (1.0 - torch.tanh(yaw_error / self.cfg.yaw_radius)) * smooth_transition_func
+            # yaw_distance = (1.0 - torch.tanh(yaw_error / self.cfg.yaw_radius)) * smooth_transition_func
+        yaw_error = torch.linalg.norm(yaw_error, dim=1)
         yaw_distance = torch.exp(- (yaw_error **2) / self.cfg.yaw_radius)
         yaw_error = yaw_error * smooth_transition_func
 
@@ -700,7 +705,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         crash_penalty_time = self.cfg.crash_penalty * (self.max_episode_length - self.episode_length_buf)
 
-
+        ## NOTE: yaw error is now really body error with change I made using yaw body quaternion error
         rewards = {
             "endeffector_combined_error": combined_reward * self.cfg.combined_scale * time_scale,
             "endeffector_pos_error": pos_error * self.cfg.pos_error_reward_scale * time_scale,
