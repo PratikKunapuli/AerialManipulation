@@ -55,6 +55,8 @@ def body_yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     compute the yaw error of the body for the 2DOF case
     q1 = body quaternion
     q2 = goal quaternion
+
+    return values are in the range 0 (0 or 180 deg difference) to 1 (+/- 90 deg difference)
     '''
     shape1 = q1.shape
     shape2 = q2.shape
@@ -80,6 +82,46 @@ def body_yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     rewards[has_horiz] = torch.ones_like(dots[has_horiz]) - dots[has_horiz] ** 2
     return rewards
 
+def shoulder_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
+    '''
+    compute the shoulder joint angle error from the ee orientation (q1) and goal orientation (q2)
+
+    this error can simply be expressed as the norm (abs. value) of the difference between the ee frame's and goal frames's
+    y vectors' vertical component
+    '''
+    hape1 = q1.shape
+    shape2 = q2.shape
+
+    q1 = q1.reshape(-1, 4)
+    q2 = q2.reshape(-1, 4)
+
+    
+    #Find vector "b2" that is the y-axis of the rotated frame
+    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q2.device).tile((q2.shape[0], 1)))
+
+    error = torch.abs(b1[:, -1]  - b2[:, -2])
+    return error
+
+def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
+    shape1 = q1.shape
+    shape2 = q2.shape
+
+    q1 = q1.reshape(-1, 4)
+    q2 = q2.reshape(-1, 4)
+
+    
+    #Find vector "b2" that is the y-axis of the rotated frame
+    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
+
+    # changed this so that yaw always only looks at horizontal (xy) components
+    # if dof == 0:
+    dot = (b1*b2).sum(dim=1)
+    # operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
+    return torch.arccos(torch.clamp(dot, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1])
+
+
 def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.Tensor:
     """Get yaw error between two quaternions.
 
@@ -101,14 +143,20 @@ def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.T
     b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
     b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
 
-    if dof == 0:
-        b1[:,2] = 0.0
-        b2[:,2] = 0.0
-
+    # changed this so that yaw always only looks at horizontal (xy) components
+    # if dof == 0:
+    b1[:,2] = 0.0
+    b2[:,2] = 0.0
+    dot = (b1*b2).sum(dim=1)
+    reward = torch.ones_like(dot)
+    has_horiz = torch.logical_and(torch.logical_or(b1[:, 0] != 0.0, b1[:, 1] != 0.0),
+                                  torch.logical_or(b2[:, 0] != 0.0, b2[:, 1] != 0.0))
     b1_norm = torch.norm(b1, dim=-1)
     b2_norm = torch.norm(b2, dim=-1)
-    operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
-    return torch.arccos(torch.clamp(operand, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1])
+    prod = b1_norm * b2_norm
+    # operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
+    reward[has_horiz] = dot[has_horiz] / prod[has_horiz]
+    return torch.arccos(torch.clamp(reward, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1])
 
 @torch.jit.script
 def quat_from_yaw(yaw: torch.Tensor) -> torch.Tensor:
