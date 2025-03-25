@@ -101,23 +101,37 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     # reward scales
     pos_radius = 0.8
     pos_radius_curriculum = int(1e7) # 10e6
+    pos_error_reward_scale = 0.0# -1.0
+    pos_distance_reward_scale = 15.0 #15.0
+
     ori_radius = 0.8
     ori_radius_curriculum = int(1e6)
+    ori_distance_reward_scale = 0.0
+    ori_error_reward_scale = 0.0 # -0.5
+
+
     lin_vel_reward_scale = -0.05 # -0.05
     ang_vel_reward_scale = -0.01 # -0.01
-    pos_distance_reward_scale = 15.0 #15.0
-    ori_distance_reward_scale = 15.0
-    pos_error_reward_scale = 0.0# -1.0
-    ori_error_reward_scale = -2.0 # -0.5
     joint_vel_reward_scale = 0.0 # -0.01
     action_prop_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
-    yaw_error_reward_scale = 0.0 # -0.01
-    yaw_distance_reward_scale = 0.0 # -0.01
-    yaw_radius = 0.2 
+    
+    yaw_error_reward_scale = -0.01 # -0.01
+    yaw_distance_reward_scale = 4.0 # -0.01
+    yaw_radius = 0.8
+    yaw_radius_curriculum = int(1e6) 
     yaw_smooth_transition_scale = 0.0
+
     shoulder_error_reward_scale = -0.01
-    wrist_error_reward_scale = -0.01
+    shoulder_radius = 0.8
+    shoulder_radius_curriculum = int(1e6)
+    shoulder_distance_reward_scale = 2.0
+    
+    wrist_error_reward_scale = -2.0 
+    wrist_radius = 0.8
+    wrist_radius_curriculum = 0#int(1e6)
+    wrist_distance_reward_scale = 0.0#1.0
+    
     stay_alive_reward = 0.0
     crash_penalty = 0.0
     scale_reward_with_time = False
@@ -333,7 +347,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 "body_yaw_error",
                 "body_yaw_distance",
                 "shoulder_joint_error",
+                "shoulder_joint_distance",
                 "wrist_joint_error",
+                "wrist_joint_distance",
                 "joint_vel",
                 "action_norm_prop",
                 "action_norm_joint",
@@ -495,6 +511,12 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             self.cfg.pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
         if self.cfg.ori_radius_curriculum > 0:
             self.cfg.ori_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum))
+        if self.cfg.yaw_radius_curriculum > 0:
+            self.cfg.yaw_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum))
+        if self.cfg.shoulder_radius_curriculum > 0:
+            self.cfg.shoulder_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum))
+        if self.cfg.wrist_radius_curriculum > 0:
+            self.cfg.wrist_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum))
 
     def _get_observations(self) -> torch.Dict[str, torch.Tensor | torch.Dict[str, torch.Tensor]]:
         """
@@ -651,6 +673,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         smooth_transition_func = 1.0 - torch.exp(-1.0 / torch.max(self.cfg.yaw_smooth_transition_scale*pos_error - 10.0, torch.zeros_like(pos_error)))
         shoulder_joint_error = torch.zeros_like(ori_error)
         wrist_joint_error = torch.zeros_like(ori_error)
+        shoulder_joint_distance = torch.zeros_like(ori_error)
+        wrist_joint_distance = torch.zeros_like(ori_error)
 
         # other_yaw_error = yaw_error_from_quats(goal_yaw_w, current_yaw_w, self.cfg.num_joints).unsqueeze(1)
         if self.cfg.num_joints != 2:
@@ -662,6 +686,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             yaw_error = body_yaw_error_from_quats(body_ori_w, goal_ori_w)
             shoulder_joint_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
             wrist_joint_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
+            shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
+            wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.cfg.wrist_radius)
 
             # yaw_distance = (1.0 - torch.tanh(yaw_error / self.cfg.yaw_radius)) * smooth_transition_func
         yaw_error = torch.linalg.norm(yaw_error, dim=1)
@@ -728,7 +754,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             "endeffector_ang_vel": ang_vel_error * self.arm_length * self.cfg.ang_vel_reward_scale * time_scale,
             "joint_vel": joint_vel_error * self.cfg.joint_vel_reward_scale * time_scale,
             "shoulder_joint_error": shoulder_joint_error * self.cfg.shoulder_error_reward_scale * time_scale,
+            "shoulder_joint_distance": shoulder_joint_distance * self.cfg.shoulder_distance_reward_scale * time_scale,
             "wrist_joint_error": wrist_joint_error * self.cfg.wrist_error_reward_scale * time_scale,
+            "wrist_joint_distance": wrist_joint_distance * self.cfg.wrist_distance_reward_scale * time_scale,
             # "joint_vel": combined_distance * self.cfg.joint_vel_reward_scale * time_scale,
             "action_norm_prop": action_prop_error * self.cfg.action_prop_norm_reward_scale * time_scale,
             "action_norm_joint": action_joint_error * self.cfg.action_joint_norm_reward_scale * time_scale,
