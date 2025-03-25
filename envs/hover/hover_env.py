@@ -106,8 +106,8 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     ori_radius = 0.8
     ori_radius_curriculum = int(1e6)
-    ori_distance_reward_scale = 0.0
-    ori_error_reward_scale = 0.0 # -0.5
+    ori_distance_reward_scale = 15.0
+    ori_error_reward_scale = -2.0 # -0.5
 
 
     lin_vel_reward_scale = -0.05 # -0.05
@@ -116,18 +116,18 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     action_prop_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
     
-    yaw_error_reward_scale = -0.01 # -0.01
-    yaw_distance_reward_scale = 4.0 # -0.01
+    yaw_error_reward_scale = -0.02 # -0.01
+    yaw_distance_reward_scale = 0.0 # -0.01
     yaw_radius = 0.8
-    yaw_radius_curriculum = int(1e6) 
+    yaw_radius_curriculum = int(0) 
     yaw_smooth_transition_scale = 0.0
 
-    shoulder_error_reward_scale = -0.01
+    shoulder_error_reward_scale = -0.02
     shoulder_radius = 0.8
-    shoulder_radius_curriculum = int(1e6)
-    shoulder_distance_reward_scale = 2.0
+    shoulder_radius_curriculum = int(0)
+    shoulder_distance_reward_scale = 0.0
     
-    wrist_error_reward_scale = -2.0 
+    wrist_error_reward_scale = 0.0#-2.0 
     wrist_radius = 0.8
     wrist_radius_curriculum = 0#int(1e6)
     wrist_distance_reward_scale = 0.0#1.0
