@@ -116,13 +116,13 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     action_prop_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
     
-    yaw_error_reward_scale = -0.02 # -0.01
+    yaw_error_reward_scale = -0.01 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
     yaw_radius = 0.8
     yaw_radius_curriculum = int(0) 
     yaw_smooth_transition_scale = 0.0
 
-    shoulder_error_reward_scale = -0.02
+    shoulder_error_reward_scale = -0.01
     shoulder_radius = 0.8
     shoulder_radius_curriculum = int(0)
     shoulder_distance_reward_scale = 0.0
@@ -332,6 +332,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
         self._desired_ori_w = torch.zeros(self.num_envs, 4, device=self.device)
 
+        # Required body yaw angles to achieve goal orientation
+        self._desired_yaws = torch.zeros(self.num_envs, 1, device=self.device)
+
         
         # Logging
         self._episode_sums = {
@@ -445,9 +448,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         self._robot_weight = (self._total_mass * self._gravity_magnitude).item()
         self._grav_vector_unit = torch.tensor([0.0, 0.0, -1.0], device=self.device).tile((self.num_envs, 1))
 
-        # Visualization marker data
-        self._frame_positions = torch.zeros(self.num_envs, 2, 3, device=self.device)
-        self._frame_orientations = torch.zeros(self.num_envs, 2, 4, device=self.device)
+        # Visualization marker data NOTE: temporarily modified to be able to see quadrotor frame as well
+        self._frame_positions = torch.zeros(self.num_envs, 3, 3, device=self.device)
+        self._frame_orientations = torch.zeros(self.num_envs, 3, 4, device=self.device)
 
         self.local_num_envs = self.num_envs
 
@@ -683,7 +686,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         
         else:
             _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
-            yaw_error = body_yaw_error_from_quats(body_ori_w, goal_ori_w)
+            body_yaw = yaw_from_quat(body_ori_w)
+            body_yaw = torch.reshape(body_yaw, (-1, 1))
+            yaw_error = torch.abs(self._desired_yaws - body_yaw)
+            # print('YAW ERROR TENSOR SHAPE:' , yaw_error.shape)
             shoulder_joint_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
             wrist_joint_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
             shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
@@ -857,6 +863,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             # self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(0.5, 1.5)
             self._desired_pos_w[env_ids, 2] = torch.zeros_like(self._desired_pos_w[env_ids, 2]).uniform_(3 - self.cfg.goal_pos_range, 3 + self.cfg.goal_pos_range)
 
+            
+
             # print("[DEBUG] Desired Pos: ", self._desired_pos_w[env_ids])
 
             if self.cfg.num_joints > 0:
@@ -875,6 +883,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             self._desired_ori_w[env_ids] = default_root_state[:, 3:7]
         else:
             raise ValueError("Invalid goal task: ", self.cfg.goal_cfg)
+        
+        ## TODO: calculate new required joint angles and quadrotor positions based on the new desired positions and orientations of the the goal frame
+        self._desired_yaws = calculate_required_yaw(self._desired_ori_w, self._desired_yaws, env_ids)
 
         # Reset Robot state
         self._robot.reset()
@@ -1005,14 +1016,24 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
     def _debug_vis_callback(self, event):
         com_pos_w, com_ori_w = combine_frame_transforms(self._robot.data.root_pos_w, self._robot.data.root_quat_w, self.com_pos_e.tile(self.local_num_envs, 1), self.com_ori_e.tile(self.local_num_envs, 1))
 
+        # elif task_body == "vehicle":
+        #     base_pos_w = self._robot.data.body_pos_w[:, self._body_id].squeeze(1)
+        #     base_ori_w = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
+        #     lin_vel_w = self._robot.data.body_lin_vel_w[:, self._body_id].squeeze(1)
+        #     ang_vel_w = self._robot.data.body_ang_vel_w[:, self._body_id].squeeze(1)
+
         # update the markers
         # Update frame positions for debug visualization
         self._frame_positions[:, 0] = self._robot.data.root_pos_w
         self._frame_positions[:, 1] = self._desired_pos_w
+        self._frame_positions[:, 2] = self._robot.data.body_pos_w[:, self._body_id].squeeze(1)
+
         # self._frame_positions[:, 2] = self._robot.data.body_pos_w[:, self._body_id].squeeze(1)
         # self._frame_positions[:, 2] = com_pos_w
         self._frame_orientations[:, 0] = self._robot.data.root_quat_w
         self._frame_orientations[:, 1] = self._desired_ori_w
+        self._frame_orientations[:, 2] = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
+        
         # self._frame_orientations[:, 2] = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
         # self._frame_orientations[:, 2] = com_ori_w
         self.frame_visualizer.visualize(self._frame_positions.flatten(0, 1), self._frame_orientations.flatten(0,1))

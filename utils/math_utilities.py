@@ -53,7 +53,7 @@ def yaw_from_quat(q: torch.Tensor) -> torch.Tensor:
 def body_yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     '''
     compute the yaw error of the body for the 2DOF case
-    q1 = body quaternion
+    q1 = body or ee quaternion, depending on implementation
     q2 = goal quaternion
 
     return values are error in radians
@@ -121,6 +121,40 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     dot = (b1*b2).sum(dim=1)
     # operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
     return torch.abs(torch.arccos(torch.clamp(dot, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1]))
+
+def calculate_required_yaw(q: torch.Tensor, yaw: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
+    '''
+    Calculates the quadrotor's required yaw angle given the goal orientation of the end effector frame at specified
+    environment ids
+
+    Args: 
+        q: Quaternions for the goal. Shape (..., 4)
+        yaw: Current estimates for the required yaw angle. Shape (..., 1)
+        env_ids: Indices where updates are required
+    '''
+
+    ## NOTE: could probably use Isaac's yaw from quaternion function 
+
+    # Get local y vector of the target frame in world coords
+    b = isaac_math_utils.quat_rotate(q[env_ids], torch.tensor([0.0, 1.0, 0.0], device=q.device).tile((q[env_ids].shape[0], 1)))
+
+    # if the local y vector is aligned with the global z vector, yaw can be any angle - use convention of angle = 0 in this case
+    new_yaws = torch.zeros((b.shape[0], 1), device=yaw.device)
+    has_x = torch.nonzero(b[:, 0])
+    has_y = torch.nonzero(b[:, 1])
+    has_horiz = torch.cat((has_x, has_y)).unique()
+    b[has_horiz, 2] = 0.0
+    b = torch.nn.functional.normalize(b, dim=1)
+
+    global_y = torch.zeros_like(b[has_horiz], device=yaw.device)
+    global_y[:, 1] = 1.0
+
+    # only doing the calculation on indices where there is a horizontal component
+    dots = (b[has_horiz]*global_y).sum(dim=1)
+    dots = torch.reshape(dots, (-1, 1))
+    new_yaws[has_horiz] = torch.arccos(torch.clamp(dots, -1.0+1e-8, 1.0-1e-8))
+    yaw[env_ids] = new_yaws
+    return yaw
 
 
 def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.Tensor:
