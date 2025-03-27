@@ -82,13 +82,33 @@ def body_yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     errors[has_horiz] = torch.arccos(torch.clamp(dots[has_horiz], -1.0+1e-8, 1.0-1e-8))
     return torch.abs(errors)
 
+def calculate_required_shoulder(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
+    '''
+    Calculates the shoulder's required angle given the goal orientation of the end effector frame at specified
+    environment ids
+
+    Args: 
+        q: Quaternions for the goal. Shape (..., 4)
+        angles: Current estimates for the required angle. Shape (..., 1)
+        env_ids: Indices where updates are required
+    '''
+
+    # Get local y vector of the target frame in world coords
+    b = isaac_math_utils.quat_rotate(q[env_ids], torch.tensor([0.0, 1.0, 0.0], device=q.device).tile((q[env_ids].shape[0], 1)))
+
+    # print('INDEX SHAPE: ', angles[env_ids].shape)
+    # print('ARCSIN SHAPE: ', torch.arcsin(torch.clamp(b[:, -1], -1.0+1e-8, 1.0-1e-8)).shape)
+    angles[env_ids] = torch.reshape(torch.arcsin(torch.clamp(b[:, -1], -1.0+1e-8, 1.0-1e-8)), (-1, 1))
+
+    return angles
+
 def shoulder_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     '''
     compute the shoulder joint angle error from the ee orientation (q1) and goal orientation (q2)
 
     returns the error in radians
     '''
-    hape1 = q1.shape
+    shape1 = q1.shape
     shape2 = q2.shape
 
     q1 = q1.reshape(-1, 4)
@@ -103,6 +123,24 @@ def shoulder_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     b2_shoulder_angles = torch.arcsin(torch.clamp(b2[:, -1], -1.0+1e-8, 1.0-1e-8))
 
     return torch.abs(b2_shoulder_angles - b1_shoulder_angles)
+
+def calculate_required_wrist(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
+    '''
+    Calculates the wrist's required angle given the goal orientation of the end effector frame at specified
+    environment ids
+
+    Args: 
+        q: Quaternions for the goal. Shape (..., 4)
+        angles: Current estimates for the required angle. Shape (..., 1)
+        env_ids: Indices where updates are required
+    '''
+
+    # Get local x vector of the target frame in world coords
+    b = isaac_math_utils.quat_rotate(q[env_ids], torch.tensor([1.0, 0.0, 0.0], device=q.device).tile((q[env_ids].shape[0], 1)))
+
+    angles[env_ids] = torch.reshape(torch.arcsin(torch.clamp(b[:, -1], -1.0+1e-8, 1.0-1e-8)), (-1, 1))
+
+    return angles
 
 def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     shape1 = q1.shape

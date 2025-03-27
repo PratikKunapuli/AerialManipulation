@@ -102,12 +102,12 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     pos_radius = 0.8
     pos_radius_curriculum = int(1e7) # 10e6
     pos_error_reward_scale = 0.0# -1.0
-    pos_distance_reward_scale = 15.0 #15.0
+    pos_distance_reward_scale = 30.0 #15.0
 
     ori_radius = 0.8
     ori_radius_curriculum = int(1e6)
-    ori_distance_reward_scale = 15.0
-    ori_error_reward_scale = -2.0 # -0.5
+    ori_distance_reward_scale = 0.0
+    ori_error_reward_scale = 0.0 # -0.5
 
 
     lin_vel_reward_scale = -0.05 # -0.05
@@ -116,18 +116,18 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     action_prop_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
     
-    yaw_error_reward_scale = -0.01 # -0.01
+    yaw_error_reward_scale = -5.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
     yaw_radius = 0.8
     yaw_radius_curriculum = int(0) 
     yaw_smooth_transition_scale = 0.0
 
-    shoulder_error_reward_scale = -0.01
+    shoulder_error_reward_scale = -3.0
     shoulder_radius = 0.8
     shoulder_radius_curriculum = int(0)
     shoulder_distance_reward_scale = 0.0
     
-    wrist_error_reward_scale = 0.0#-2.0 
+    wrist_error_reward_scale = -3.0 #-2.0 
     wrist_radius = 0.8
     wrist_radius_curriculum = 0#int(1e6)
     wrist_distance_reward_scale = 0.0#1.0
@@ -334,6 +334,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Required body yaw angles to achieve goal orientation
         self._desired_yaws = torch.zeros(self.num_envs, 1, device=self.device)
+        self._desired_shoulder_angles = torch.zeros_like(self._desired_yaws)
+        self._desired_wrist_angles = torch.zeros_like(self._desired_yaws)
 
         
         # Logging
@@ -680,6 +682,15 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         wrist_joint_distance = torch.zeros_like(ori_error)
 
         # other_yaw_error = yaw_error_from_quats(goal_yaw_w, current_yaw_w, self.cfg.num_joints).unsqueeze(1)
+
+         # Compute the joint states
+        shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
+        wrist_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
+        if self.cfg.num_joints > 0:
+            shoulder_joint_pos = self._robot.data.joint_pos[:, self._shoulder_joint_idx].unsqueeze(1)
+        if self.cfg.num_joints > 1:
+            wrist_joint_pos = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
+
         if self.cfg.num_joints != 2:
         # yaw_error = yaw_error_from_quats(goal_ori_w, base_ori_w, self.cfg.num_joints).unsqueeze(1)
             other_yaw_error = torch.sum(torch.square(other_yaw_error), dim=1)
@@ -688,10 +699,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
             body_yaw = yaw_from_quat(body_ori_w)
             body_yaw = torch.reshape(body_yaw, (-1, 1))
-            yaw_error = torch.abs(self._desired_yaws - body_yaw)
+            yaw_error = self._desired_yaws - body_yaw
             # print('YAW ERROR TENSOR SHAPE:' , yaw_error.shape)
-            shoulder_joint_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
-            wrist_joint_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
+            shoulder_joint_error = torch.linalg.norm(self._desired_shoulder_angles - shoulder_joint_pos, dim=1)
+            wrist_joint_error = torch.linalg.norm(self._desired_wrist_angles - wrist_joint_pos, dim=1)
             shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
             wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.cfg.wrist_radius)
 
@@ -886,6 +897,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         
         ## TODO: calculate new required joint angles and quadrotor positions based on the new desired positions and orientations of the the goal frame
         self._desired_yaws = calculate_required_yaw(self._desired_ori_w, self._desired_yaws, env_ids)
+        self._desired_shoulder_angles = calculate_required_shoulder(self._desired_ori_w, self._desired_shoulder_angles, env_ids)
+        self._desired_wrist_angles = calculate_required_wrist(self._desired_ori_w, self._desired_wrist_angles, env_ids)
 
         # Reset Robot state
         self._robot.reset()
