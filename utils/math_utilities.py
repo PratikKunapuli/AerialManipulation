@@ -195,6 +195,46 @@ def calculate_required_yaw(q: torch.Tensor, yaw: torch.Tensor, env_ids: torch.Te
     return yaw
 
 
+def calculate_required_pos(q: torch.Tensor, p_goal: torch.Tensor, p_guess: torch.Tensor,
+                            arm_length: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
+    '''
+    Calculates the quadrotor's required position given the goal orientation and position
+    of the end effector frame at specified environment ids
+
+    Args: 
+        q: Quaternions for the goal. Shape (..., 4)
+        p_goal: Goal position. Shape (..., 3)
+        p_estimate: Current estimates for the required position. Shape (..., 3)
+        arm_length: EE arm length. Scalar
+        env_ids: Indices where updates are required
+    '''
+    # Get local y vector of the target frame in world coords
+    b = isaac_math_utils.quat_rotate(q[env_ids], torch.tensor([0.0, 1.0, 0.0], device=q.device).tile((q[env_ids].shape[0], 1)))
+
+    # Subtract transformed vectors scaled by arm length from the goal position
+    p_guess[env_ids] = p_goal[env_ids] - arm_length.item() * b
+    return p_guess
+
+def calculate_required_angles(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    '''
+    Calculates the three required angles (yaw, shoulder, wrist) of the end effector given the goal orientation and specificed environement ids
+
+    Args:
+        q: Goal quaternion (... , 4)
+        angles: Current estimate (..., 3)
+        env_ids: Update indices
+    '''
+
+    roll, pitch, yaw = isaac_math_utils.euler_xyz_from_quat(q[env_ids])
+    angles[env_ids, 0] = roll
+    angles[env_ids, 1] = pitch
+    angles[env_ids, 2] = yaw
+
+    return angles
+
+
+
+
 def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.Tensor:
     """Get yaw error between two quaternions.
 
