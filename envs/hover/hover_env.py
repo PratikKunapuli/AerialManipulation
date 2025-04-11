@@ -15,7 +15,7 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
 from omni.isaac.lab.utils.math import (subtract_frame_transforms, combine_frame_transforms, matrix_from_quat, quat_error_magnitude, 
                                         random_orientation, quat_inv, quat_rotate_inverse, quat_mul, yaw_quat, quat_conjugate,
-                                        quat_rotate, normalize, wrap_to_pi)
+                                        quat_rotate, normalize, wrap_to_pi, euler_xyz_from_quat)
 from omni.isaac.lab_assets import CRAZYFLIE_CFG
 import gymnasium as gym
 import numpy as np
@@ -102,16 +102,16 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     body_pos_radius = 0.8
     body_pos_radius_curriculum = int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
-    body_pos_distance_reward_scale = 10.0 #15.0
+    body_pos_distance_reward_scale = 15.0 #15.0
 
     ee_pos_radius = 0.8
     ee_pos_radius_curriculum = int(2e7) # 10e6
     ee_pos_error_reward_scale = 0.0 # -1.0
-    ee_pos_distance_reward_scale = 10.0 #15.0
+    ee_pos_distance_reward_scale = 15.0 #15.0
 
     ori_radius = 0.8
     ori_radius_curriculum = int(2e7)
-    ori_distance_reward_scale = 10.0
+    ori_distance_reward_scale = 15.0
     ori_error_reward_scale = 0.0 # -0.5
 
     lin_vel_reward_scale = -0.1 # -0.05
@@ -600,7 +600,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             [
                 pos_error_b,                                # (num_envs, 3)
                 ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
-                yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
+                # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
                 grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
                 lin_vel_b,                                  # (num_envs, 3)
                 ang_vel_b,                                  # (num_envs, 3)
@@ -617,6 +617,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         if self.cfg.num_joints == 2:
             body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
                                                           self._desired_body_pos, goal_ori_w)
+            body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
+            body_roll = torch.reshape(body_roll, (-1, 1))
+            body_pitch = torch.reshape(body_pitch, (-1, 1))
             critic_obs = torch.cat (
                 [
                     pos_error_b,                                # (num_envs, 3)
@@ -630,7 +633,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     shoulder_joint_vel,                         # (num_envs, 1)
                     wrist_joint_vel,  
                     body_pos_error,
-                    body_ori_w,
+                    # body_ori_w,
+                    body_roll,
+                    body_pitch,
                     body_lin_vel_w,
                     body_ang_vel_w
                 ],
@@ -665,6 +670,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             gc_obs = None
 
         if self.cfg.eval_mode:
+            # add in actions for debugging in the evaluation
             full_state = torch.cat(
                 [
                     quad_pos_w,                                 # (num_envs, 3) [0-3]
@@ -679,10 +685,11 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     wrist_joint_pos,                            # (num_envs, 1) [27]
                     shoulder_joint_vel,                         # (num_envs, 1) [28]
                     wrist_joint_vel,                            # (num_envs, 1) [29]
-                    self._desired_pos_w,                        # (num_envs, 3) [30-33] [26-29]
-                    self._desired_ori_w,                        # (num_envs, 4) [33-37] [29-33]
+                    self._desired_pos_w,                        # (num_envs, 3) [30-33] 
+                    self._desired_ori_w,                        # (num_envs, 4) [33-37] 
+                    self._actions                               # (num_envs, 6) [38-43]
                 ],
-                dim=-1                                          # (num_envs, 18)
+                dim=-1                                          # (num_envs, 44)
             )
         else:
             full_state = None
