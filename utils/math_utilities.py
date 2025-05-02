@@ -143,22 +143,51 @@ def calculate_required_wrist(q: torch.Tensor, angles: torch.Tensor, env_ids: tor
     return angles
 
 def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
+    '''
+    Args:
+        q1: current EE rotation, (..., 4)
+        q2: target EE rotation (..., 4)
+
+    Returns abs value of the error of the wrist angle
+    '''
+    
     shape1 = q1.shape
     shape2 = q2.shape
 
     q1 = q1.reshape(-1, 4)
     q2 = q2.reshape(-1, 4)
 
-    
-    #Find vector "b2" that is the x-axis of the rotated frame
-    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
-    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
+    # Step 1: Find the quaternion that will rotate the local y-vector of frame 1 to frame 2 
+    # (this is the vector that points axially through the EE).
+    # Based on https://stackoverflow.com/questions/1171849/finding-quaternion-representing-the-rotation-from-one-vector-to-another
+    y_1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    y_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
+    # needed if y_1 and y_2 are aligned, plus for a later calculation
+    x_1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    dot = (y_1 * y_2).sum(dim=1) # unit vectors, also gives cos(theta)
+    c_half = torch.sqrt((1 + dot) / 2)
+    s_half = torch.sqrt((1 - dot) / 2).reshape((-1, 1))
+    axis = torch.linalg.cross(y_1, y_2)
+    axis = torch.nn.functional.normalize(axis, dim=1)
+    q_12 = torch.zeros_like(q1)
+    q_12[:, 0] = c_half
+    q_12[:, 1:] = axis * s_half
+    where_zero = dot < (-1 + 1e-6)
+    q_12[where_zero, 0] = 0.0
+    q_12[where_zero, 1:] = x_1[where_zero]
 
-    # changed this so that yaw always only looks at horizontal (xy) components
-    # if dof == 0:
-    dot = (b1*b2).sum(dim=1)
-    # operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
-    return torch.abs(torch.arccos(torch.clamp(dot, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1]))
+    x_1_transform = isaac_math_utils.quat_rotate(q_12, x_1)
+
+    # Step 2: Now that we have rotated the EE x-axis onto the frame where the EE y-axis and goal y-axis are the
+    # same, calculate the angular error between them
+    x_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))  
+    dots = (x_1_transform * x_2).sum(dim=1)
+    return torch.abs(torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8))).reshape(-1, 1)
+
+
+
+
+
 
 def calculate_required_yaw(q: torch.Tensor, yaw: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
     '''
@@ -218,7 +247,7 @@ def calculate_required_pos(q: torch.Tensor, p_goal: torch.Tensor, p_guess: torch
 def calculate_required_angles(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     '''
     Calculates the three required angles (yaw, shoulder, wrist) of the end effector given the goal orientation and specificed environement ids
-
+    (likely incorrect)
     Args:
         q: Goal quaternion (... , 4)
         angles: Current estimate (..., 3)

@@ -1,7 +1,7 @@
 import argparse
 import sys 
 from omni.isaac.lab.app import AppLauncher
-
+from matplotlib import pyplot as plt
 # local imports
 from utils import cli_args  # isort: skip
 
@@ -123,8 +123,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
 
             # policy_path = "./baseline_cf_0dof/"
         else:
-            env_cfg.task_body = "COM"
-            env_cfg.goal_body = "COM"
+            # env_cfg.task_body = "COM" 
+            # env_cfg.goal_body = "COM"
+            env_cfg.task_body = "root"
+            env_cfg.goal_body = "root"
             env_cfg.reward_task_body = "root"
             env_cfg.reward_goal_body = "root"
 
@@ -279,11 +281,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 # env_cfg.viewer.env_index = args_cli.follow_robot
                 # env_cfg.viewer.asset_name = "robot"
 
-                env_cfg.viewer.eye = (0, 0, 5.5)
+                # env_cfg.viewer.eye = (0, 0, 5.5)
+                env_cfg.viewer.eye = (0.75, 0.75, 0.5)
+
                 env_cfg.viewer.lookat = (0, 0, 0)
                 env_cfg.viewer.resulution = (720, 720)
-                # env_cfg.viewer.origin_type = "asset_root"
-                env_cfg.viewer.origin_type = "env"
+                env_cfg.viewer.origin_type = "asset_root"
+                # env_cfg.viewer.origin_type = "env"
                 env_cfg.viewer.env_index = args_cli.follow_robot
                 env_cfg.viewer.asset_name = "robot"
 
@@ -410,7 +414,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
 
         export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
         export_policy_as_jit(
-            ppo_runner.alg.actor_critic, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt"
+            ppo_runner.alg.policy, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt"
         )
         
     
@@ -454,6 +458,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                     # print("Obs: ", obs_dict["gc"][args_cli.follow_robot])
                 else:
                     actions = agent(obs_tensor)
+                    # print(f'Mean arm actions:  {actions[:, -2:]}')
                 times.append(time.time() - start)
 
                 if args_cli.baseline:
@@ -472,7 +477,28 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
 
             print("Full states shape: ", full_states.shape)
             torch.save(full_states, os.path.join(policy_path, save_prefix + "eval_full_states.pt"))
-            torch.save(rewards, os.path.join(policy_path, save_prefix + "eval_rewards.pt"))
+            torch.save(rewards, os.path.join(policy_path, save_prefix + "eval_rewards.pt")) # (num_envs, time_steps)
+            print(rewards.shape)
+            if args_cli.follow_robot != -1:
+                T = rewards.shape[1] - 1
+                x = np.arange(T) * 0.02
+                plot_path = os.path.join(policy_path, "plots", "eval", f"robot{args_cli.follow_robot}")
+                plots = ["Policy shoulder", "Policy wrist", "Policy thrust", "Policy MX",
+                        "Policy MY", "Policy MZ", "Shoulder joint position", "Wrist joint position", "Wrist error"]
+                cols = [41, 42, 37, 38, 39, 40, 26, 27, 43]
+                os.makedirs(plot_path, exist_ok=True)
+                for i, plot in enumerate(plots):
+                    fig, ax = plt.subplots()
+                    plt.plot(x, full_states[args_cli.follow_robot, :-1, cols[i]].cpu())
+                    plt.title(plot)
+                    plot_name = f'eval_{plot}_robot_{args_cli.follow_robot}.png'
+                    plt.savefig(os.path.join(plot_path, plot_name))
+                fig, ax = plt.subplots()
+                plt.plot(x, rewards[args_cli.follow_robot, :-1].cpu())
+                plt.title('Rewards')
+                plot_name = f'eval_rewards_robot_{args_cli.follow_robot}.png'
+                plt.savefig(os.path.join(plot_path, plot_name))
+                    
 
             print("Final Info: \n\n", info, "\n")
 

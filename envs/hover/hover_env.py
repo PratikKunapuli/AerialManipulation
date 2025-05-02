@@ -100,17 +100,17 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     # reward scales
     body_pos_radius = 0.8
-    body_pos_radius_curriculum = int(1e7) # 10e6
+    body_pos_radius_curriculum = int(9e6) #int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
-    body_pos_distance_reward_scale = 15.0 #15.0
+    body_pos_distance_reward_scale = 10.0 #15.0
 
     ee_pos_radius = 0.8
-    ee_pos_radius_curriculum = int(2e7) # 10e6
+    ee_pos_radius_curriculum = int(2e7) #int(2e7) # 10e6
     ee_pos_error_reward_scale = 0.0 # -1.0
     ee_pos_distance_reward_scale = 15.0 #15.0
 
     ori_radius = 0.8
-    ori_radius_curriculum = int(2e7)
+    ori_radius_curriculum = int(3e7) #int(2e7)
     ori_distance_reward_scale = 15.0
     ori_error_reward_scale = 0.0 # -0.5
 
@@ -596,20 +596,25 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             wrist_joint_pos = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
             wrist_joint_vel = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
 
+        # to test if the network can learn the required wrist angle on its own, will explicitly tell give the goal orientation and the quadrotor body orientation
+        body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
+        goal_ori_w_flattened_matrix = matrix_from_quat(goal_ori_w).flatten(-2, -1)
         obs = torch.cat(
             [
-                pos_error_b,                                # (num_envs, 3)
-                ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
-                # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
-                grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
-                lin_vel_b,                                  # (num_envs, 3)
-                ang_vel_b,                                  # (num_envs, 3)
-                shoulder_joint_pos,                         # (num_envs, 1)
-                wrist_joint_pos,                            # (num_envs, 1)
-                shoulder_joint_vel,                         # (num_envs, 1)
-                wrist_joint_vel,                            # (num_envs, 1)
+                pos_error_b,                                # (num_envs, 3) [0-2]
+                # ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
+                body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
+                yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
+                goal_ori_w_flattened_matrix,                # [12-20]
+                grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
+                lin_vel_b,                                  # (num_envs, 3) [24-26]
+                ang_vel_b,                                  # (num_envs, 3) [27-29]
+                shoulder_joint_pos,                         # (num_envs, 1) [30]
+                wrist_joint_pos,                            # (num_envs, 1) [31]
+                shoulder_joint_vel,                         # (num_envs, 1) [32]
+                wrist_joint_vel,                            # (num_envs, 1) [33]
             ],
-            dim=-1                                          # (num_envs, 22)
+            dim=-1                                          # (num_envs, 34)
         )
 
         # additional critic observations for 2DOF case
@@ -622,7 +627,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             body_pitch = torch.reshape(body_pitch, (-1, 1))
             critic_obs = torch.cat (
                 [
-                    pos_error_b,                                # (num_envs, 3)
+                    pos_error_b,                                # (num_envs, 3) [0-2]
                     ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
                     yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
                     grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
@@ -633,17 +638,14 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     shoulder_joint_vel,                         # (num_envs, 1)
                     wrist_joint_vel,  
                     body_pos_error,
-                    # body_ori_w,
-                    body_roll,
-                    body_pitch,
+                    body_ori_w_flattened_matrix,
+                    # body_roll,
+                    # body_pitch,
                     body_lin_vel_w,
                     body_ang_vel_w
                 ],
                 dim=-1
             )
-            
-
-        
         
         # We also need the state information for other controllers like the decoupled controller.
         # This is the full state of the robot
@@ -670,24 +672,26 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             gc_obs = None
 
         if self.cfg.eval_mode:
+            wrist_error = wrist_angle_error_from_quats(ee_ori_w, goal_ori_w)
             # add in actions for debugging in the evaluation
             full_state = torch.cat(
                 [
-                    quad_pos_w,                                 # (num_envs, 3) [0-3]
-                    quad_ori_w,                                 # (num_envs, 4) [3-7]
-                    quad_lin_vel_w,                             # (num_envs, 3) [7-10]
-                    quad_ang_vel_w,                             # (num_envs, 3) [10-13]
-                    ee_pos_w,                                   # (num_envs, 3) [13-16]
-                    ee_ori_w,                                   # (num_envs, 4) [16-20]
-                    ee_lin_vel_w,                               # (num_envs, 3) [20-23]
-                    ee_ang_vel_w,                               # (num_envs, 3) [23-26]
+                    quad_pos_w,                                 # (num_envs, 3) [0-2]
+                    quad_ori_w,                                 # (num_envs, 4) [3-6]
+                    quad_lin_vel_w,                             # (num_envs, 3) [7-9]
+                    quad_ang_vel_w,                             # (num_envs, 3) [10-12]
+                    ee_pos_w,                                   # (num_envs, 3) [13-15]
+                    ee_ori_w,                                   # (num_envs, 4) [16-19]
+                    ee_lin_vel_w,                               # (num_envs, 3) [20-22]
+                    ee_ang_vel_w,                               # (num_envs, 3) [23-25]
                     shoulder_joint_pos,                         # (num_envs, 1) [26] 
                     wrist_joint_pos,                            # (num_envs, 1) [27]
                     shoulder_joint_vel,                         # (num_envs, 1) [28]
                     wrist_joint_vel,                            # (num_envs, 1) [29]
-                    self._desired_pos_w,                        # (num_envs, 3) [30-33] 
-                    self._desired_ori_w,                        # (num_envs, 4) [33-37] 
-                    self._actions                               # (num_envs, 6) [38-43]
+                    self._desired_pos_w,                        # (num_envs, 3) [30-32] 
+                    self._desired_ori_w,                        # (num_envs, 4) [33-36] 
+                    self._actions,                              # (num_envs, 6) [37-42]
+                    wrist_error                                 # (num_envs, 1) [43]
                 ],
                 dim=-1                                          # (num_envs, 44)
             )
@@ -910,7 +914,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         extras["Metrics/Final Yaw Error to Goal"] = final_yaw_error_to_goal
         extras["Episode Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
-        extras["Metrics/Position Radius"] = self.cfg.ee_pos_radius
+        extras["Metrics/EE Position Radius"] = self.cfg.ee_pos_radius
+        extras["Metrics/Quad Position Radius"] = self.cfg.body_pos_radius
+        extras["Metrics/Ori Radius"] = self.cfg.ori_radius
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
 
