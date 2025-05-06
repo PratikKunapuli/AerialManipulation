@@ -691,7 +691,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     self._desired_pos_w,                        # (num_envs, 3) [30-32] 
                     self._desired_ori_w,                        # (num_envs, 4) [33-36] 
                     self._actions,                              # (num_envs, 6) [37-42]
-                    wrist_error                                 # (num_envs, 1) [43]
+                    wrist_error,                                 # (num_envs, 1) [43]
+                    pos_error_b,
+                    body_pos_error,
+
                 ],
                 dim=-1                                          # (num_envs, 44)
             )
@@ -917,6 +920,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         extras["Metrics/EE Position Radius"] = self.cfg.ee_pos_radius
         extras["Metrics/Quad Position Radius"] = self.cfg.body_pos_radius
         extras["Metrics/Ori Radius"] = self.cfg.ori_radius
+        extras["Metrics/Wrist Radius"] = self.cfg.wrist_radius
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
 
