@@ -165,8 +165,9 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     # needed if y_1 and y_2 are aligned, plus for a later calculation
     x_1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
     dot = (y_1 * y_2).sum(dim=1) # unit vectors, also gives cos(theta)
-    c_half = torch.sqrt((1 + dot) / 2)
-    s_half = torch.sqrt((1 - dot) / 2).reshape((-1, 1))
+    dot = torch.clamp(dot, -1.0+1e-8, 1.0-1e-8)
+    c_half = torch.sqrt((1.0 + dot) / 2)
+    s_half = torch.sqrt((1.0 - dot) / 2).reshape((-1, 1))
     axis = torch.linalg.cross(y_1, y_2)
     axis = torch.nn.functional.normalize(axis, dim=1)
     q_12 = torch.zeros_like(q1)
@@ -182,7 +183,19 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     # same, calculate the angular error between them
     x_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))  
     dots = (x_1_transform * x_2).sum(dim=1)
-    return torch.abs(torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8))).reshape(-1, 1)
+    ans = torch.abs(torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8))).reshape(-1, 1)
+    if torch.any(torch.isnan(ans)):
+        mask = torch.isnan(ans).squeeze()
+        print('found nans')
+        print('q_12 where nan:')
+        print(q_12[mask])
+        print('original dot product where nan:')
+        print(dot[mask])
+        print('calculated axis where nan:')
+        print(axis[mask])
+        print('s_half where nan:')
+        print(s_half[mask])
+    return ans
 
 
 
