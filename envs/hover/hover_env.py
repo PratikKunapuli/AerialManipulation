@@ -123,19 +123,19 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
     yaw_radius = 0.8
-    yaw_radius_curriculum = int(9e6) 
+    yaw_radius_curriculum = int(0) 
     yaw_smooth_transition_scale = 0.0
 
     shoulder_error_reward_scale = 0.0
     shoulder_radius = 0.8
-    shoulder_radius_curriculum = int(9e6)
+    shoulder_radius_curriculum = int(0)
     shoulder_distance_reward_scale = 0.0
     
     wrist_error_reward_scale = 0.0 #-2.0 
     wrist_radius = 0.8
     wrist_radius_curriculum = int(9e6)
-    wrist_distance_reward_scale = 0.0#1.0
-    
+    wrist_distance_reward_scale = 0.1#1.0
+
     stay_alive_reward = 0.0
     crash_penalty = 0.0
     scale_reward_with_time = False
@@ -175,9 +175,6 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     eval_mode = False
     gc_mode = False
-
-    # Trying a new reward structure where the quadrotor position is not penalized if the error is beyond a certain threshold
-    quad_pos_error_threshold = -1.0 # if value is negative, reinitialize it in the env to be the length of the arm
 
 
 @configclass
@@ -418,8 +415,6 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                             self._robot.root_physx_view.get_link_transforms()[0, self._ee_id,:3].squeeze() 
         
         self.arm_length = torch.linalg.norm(self.arm_offset, dim=-1)
-        if self.cfg.quad_pos_error_threshold < 0.0:
-            self.cfg.quad_pos_error_threshold = self.arm_length
         
         # Compute position and orientation offset between the end effector and the vehicle
         quad_pos = self._robot.data.body_pos_w[0, self._body_id]
@@ -724,7 +719,6 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             ee_pos_error = torch.linalg.norm(goal_pos_w - base_pos_w, dim=1)
             body_pos_error = torch.linalg.norm(self._desired_body_pos - body_pos_w, dim=1)
         # pos_distance = 1.0 - torch.tanh(pos_error / self.cfg.pos_radius)
-        body_pos_error = torch.clamp(body_pos_error, max=self.cfg.quad_pos_error_threshold)
         if self.cfg.square_pos_error:
             ee_pos_distance = torch.exp(- (ee_pos_error **2) / self.cfg.ee_pos_radius)
             body_pos_distance = torch.exp(- (body_pos_error **2) / self.cfg.body_pos_radius)
@@ -765,16 +759,14 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         else:
             # _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
             body_yaw = yaw_from_quat(body_ori_w)
-            # yaw_error = self._desired_angles[:, 2:] - torch.reshape(body_yaw, (-1, 1)) 
-            yaw_error = yaw_error_from_quats(base_ori_w, goal_ori_w, 2)     
-            # shoulder_joint_error = torch.linalg.norm(self._desired_angles[:, 0:1] - shoulder_joint_pos, dim=1)
-            shoulder_joint_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
+            yaw_error = self._desired_angles[:, 2:] - torch.reshape(body_yaw, (-1, 1))         
+            shoulder_joint_error = torch.linalg.norm(self._desired_angles[:, 0:1] - shoulder_joint_pos, dim=1)
             wrist_joint_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze()
             shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
             wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.cfg.wrist_radius)
 
             # yaw_distance = (1.0 - torch.tanh(yaw_error / self.cfg.yaw_radius)) * smooth_transition_func
-        # yaw_error = torch.linalg.norm(yaw_error, dim=1)
+        yaw_error = torch.linalg.norm(yaw_error, dim=1)
         yaw_distance = torch.exp(- (yaw_error **2) / self.cfg.yaw_radius)
         yaw_error = yaw_error * smooth_transition_func
 
