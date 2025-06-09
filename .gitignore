@@ -166,6 +166,7 @@ cython_debug/
 
 # Log files
 /logs
+/outputs
 rl/logs
 rl/runs
 rl/outputs
@@ -182,5 +183,8 @@ rl/*baseline*
 *.jpeg
 *.svg
 *.pdf
+
+# VS Code
+.vscode/
 
 # Allow specific files to be tracked by using force-add (git add -f file.png)
