@@ -170,3 +170,17 @@ rl/logs
 rl/runs
 rl/outputs
 rl/slurm_outputs/
+rl/baseline*
+
+# Data files
+*.pt
+*.pth
+
+# Image files
+*.png
+*.jpg
+*.jpeg
+*.svg
+*.pdf
+
+# Allow specific files to be tracked by using force-add (git add -f file.png)
