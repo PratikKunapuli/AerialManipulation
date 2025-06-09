@@ -1,0 +1,23 @@
+<?xml version="1.0" ?>
+<robot name="CrazyflieBL">
+
+<link name="body">
+    <inertial>
+        <mass value="0.039"/>
+        <inertia ixx="3e-5" ixy="0.0" ixz="0.0" iyy="3e-5" iyz="0.0" izz="3.5e-5"/>
+    </inertial>
+
+    <visual>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+        <geometry>
+            <mesh filename="./mujoco_assets/cf2_0.obj"/>
+        </geometry>
+    </visual>
+    <collision>
+        <origin xyz="0 0 0" rpy="0 0 0"/>
+         <geometry>
+            <mesh filename="./mujoco_assets/cf2_0.obj"/>
+        </geometry>
+    </collision>
+</link>
+</robot>
