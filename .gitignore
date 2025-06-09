@@ -170,7 +170,7 @@ rl/logs
 rl/runs
 rl/outputs
 rl/slurm_outputs/
-rl/baseline*
+rl/*baseline*
 
 # Data files
 *.pt
