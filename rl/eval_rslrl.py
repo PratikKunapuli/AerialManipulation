@@ -198,6 +198,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 env_cfg.combined_tolerance = hydra_cfg["combined_tolerance"]
             if "combined_reward_scale" in hydra_cfg:
                 env_cfg.combined_reward_scale = hydra_cfg["combined_reward_scale"]
+
     # else:
     #     yaml_base = "./logs/rsl_rl/AM_0DOF_Hover/2024-09-14_14-38-12_rsl_rl_test_default_1024_env_pos_distance_15_yaw_error_-2.0_no_smooth_transition_full_ori"
     #     with open(os.path.join(yaml_base, "params/env.yaml"), "r") as f:
@@ -383,7 +384,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             #                             skip_precompute=True, vehicle="Crazyflie", control_mode="CTBM", print_debug=False, feed_forward=feed_forward)
             
             agent = DecoupledController(env.num_envs, 0, env.vehicle_mass, env.arm_mass, env.quad_inertia, env.arm_offset, env.orientation_offset, com_pos_w=None, device=device,
-                                        skip_precompute=True, vehicle="Crazyflie", **control_params_dict)
+                                        vehicle="Crazyflie", **control_params_dict)
             
         # Optuna-tuned gains for EE-LQR Cost (equal pos and yaw weight)
         # agent = DecoupledController(env.num_envs, 0, env.vehicle_mass, env.arm_mass, env.quad_inertia, env.arm_offset, env.orientation_offset, com_pos_w=None, device=device,
@@ -430,6 +431,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     if args_cli.baseline:
         obs_dict, info = envs.reset()
         obs = obs_dict["policy"]
+        # print(envs.vehicle_mass)
+
+        # Refresh GC models for mass, inertia and ttw
+        # agent.reset_dr_terms(None, env.vehicle_mass, env.vehicle_inertia, env._thrust_to_weight)
     else:
         # obs, dict_obs = envs.reset()
         obs, dict_obs = envs.get_observations()
@@ -442,10 +447,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # print("starting norm: ", torch.norm(ee_start - goal_start, dim=1))
     # input("Check and press Enter to continue...")
     # import code; code.interact(local=locals())
+    max_steps = int(env_cfg.episode_length_s * env_cfg.policy_rate_hz)
+
 
     full_state_size = obs_dict["full_state"].shape[1]
-    full_states = torch.zeros((args_cli.num_envs, 500, full_state_size), dtype=torch.float32).to(device)
-    rewards = torch.zeros((args_cli.num_envs, 500), dtype=torch.float32).to(device)
+    full_states = torch.zeros((args_cli.num_envs, max_steps, full_state_size), dtype=torch.float32).to(device)
+    rewards = torch.zeros((args_cli.num_envs, max_steps), dtype=torch.float32).to(device)
+    actions_log = torch.zeros((args_cli.num_envs, max_steps, 4), dtype=torch.float32).to(device)
 
 
     steps = 0
@@ -455,22 +463,21 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # input("Press Enter to continue...")
     with torch.no_grad():
         while simulation_app.is_running():
-            while steps < 500 and not done:
+            while steps < max_steps and not done:
                 obs_tensor = obs_dict["policy"]
                 full_states[:, steps, :] = obs_dict["full_state"]
                 # print("Full State: ", obs_dict["full_state"][0, 33:])
 
                 start = time.time()
                 if args_cli.baseline:
-                    # action = agent.get_action(obs_dict["full_state"])
-                    action = agent.get_action(obs_dict["gc"])
-                    # print("Obs: ", obs_dict["gc"][args_cli.follow_robot])
+                    actions = agent.get_action(obs_dict["gc"])
                 else:
                     actions = agent(obs_tensor)
+                actions_log[:, steps] = actions
                 times.append(time.time() - start)
 
                 if args_cli.baseline:
-                    obs_dict, reward, terminated, truncated, info = envs.step(action)
+                    obs_dict, reward, terminated, truncated, info = envs.step(actions)
                     done_count += terminated.sum().item() + truncated.sum().item()
                 else:
                     obs, reward, dones, extras = envs.step(actions)
@@ -492,36 +499,97 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             print("\nAverage inference time: ", np.mean(times))
 
             quad_pos = full_states[args_cli.follow_robot, :-1, 0:3].cpu().numpy()
+            quad_quat = full_states[args_cli.follow_robot, :-1, 3:7].cpu().numpy()
+            quad_vel = full_states[args_cli.follow_robot, :-1, 7:10].cpu().numpy()
+            quad_ang_vel = full_states[args_cli.follow_robot, :-1, 10:13].cpu().numpy()
             ee_pos = full_states[args_cli.follow_robot, :-1, 13:16].cpu().numpy()
             goal_pos = full_states[args_cli.follow_robot, :-1, 26:26 + 3].cpu().numpy()
+            
 
-            # import matplotlib.pyplot as plt
-            # plt.figure()
-            # plt.subplot(3, 1, 1)
-            # plt.plot(quad_pos[:, 0], label="Quad X")
-            # plt.plot(ee_pos[:, 0], label="EE X")
-            # plt.plot(goal_pos[:, 0], label="Goal X")
-            # plt.legend()
-            # plt.subplot(3, 1, 2)
-            # plt.plot(quad_pos[:, 1], label="Quad Y")
-            # plt.plot(ee_pos[:, 1], label="EE Y")
-            # plt.plot(goal_pos[:, 1], label="Goal Y")
-            # plt.legend()
-            # plt.subplot(3, 1, 3)
-            # plt.plot(quad_pos[:, 2], label="Quad Z")
-            # plt.plot(ee_pos[:, 2], label="EE Z")
-            # plt.plot(goal_pos[:, 2], label="Goal Z")
-            # plt.legend()
-            # plt.savefig(os.path.join(policy_path, save_prefix + "eval_plot.png"))
 
+
+            if args_cli.follow_robot >= 0:
+                import matplotlib.pyplot as plt
+                import omni.isaac.lab.utils.math as isaac_math_utils
+                quad_euler = isaac_math_utils.euler_xyz_from_quat(full_states[args_cli.follow_robot, :-1, 3:7])
+                quad_roll = quad_euler[0].cpu().numpy()
+                quad_pitch = quad_euler[1].cpu().numpy()
+                quad_yaw = quad_euler[2].cpu().numpy()
+                T = rewards.shape[1] - 1
+                x =  np.arange(T) * (1/env_cfg.policy_rate_hz)
+
+                save_path = video_folder_path +"/" + video_name + ".png"
+                
+                fig = plt.figure(figsize=(10, 10))
+                plt.subplot(4, 3, 1)
+                plt.plot(x, quad_pos[:, 0], label="Quad X")
+                plt.plot(x, goal_pos[:, 0], label="Goal X")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 2)
+                plt.plot(x, quad_pos[:, 1], label="Quad Y")
+                plt.plot(x, goal_pos[:, 1], label="Goal Y")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 3)
+                plt.plot(x, quad_pos[:, 2], label="Quad Z")
+                plt.plot(x, goal_pos[:, 2], label="Goal Z")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 4)
+                plt.plot(x, quad_vel[:, 0], label="Quad Vel X")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 5)
+                plt.plot(x, quad_vel[:, 1], label="Quad Vel Y")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 6)
+                plt.plot(x, quad_vel[:, 2], label="Quad Vel Z")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 7)
+                plt.plot(x, quad_roll, label="Quad Roll")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 8)
+                plt.plot(x, quad_pitch, label="Quad Pitch")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 9)
+                plt.plot(x, quad_yaw, label="Quad Yaw")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 10)
+                plt.plot(x, quad_ang_vel[:, 0], label="Quad Ang Vel X")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 11)
+                plt.plot(x, quad_ang_vel[:, 1], label="Quad Ang Vel Y")
+                plt.legend(loc="best")
+                plt.subplot(4, 3, 12)
+                plt.plot(x, quad_ang_vel[:, 2], label="Quad Ang Vel Z")
+                plt.legend(loc="best")
+                plt.tight_layout()
+                plt.savefig(save_path)
+                print(f"Saved plot to {save_path}")
+                plt.close(fig)
+
+                # Plot actions
+                fig = plt.figure(figsize=(10, 10))
+                actions_log = actions_log.cpu().numpy()
+                plt.subplot(2, 2, 1)
+                plt.plot(x, actions_log[args_cli.follow_robot, :-1, 0], label="Action 1")
+                plt.legend(loc="best")
+                plt.subplot(2, 2, 2)
+                plt.plot(x, actions_log[args_cli.follow_robot, :-1, 1], label="Action 2")
+                plt.legend(loc="best")
+                plt.subplot(2, 2, 3)
+                plt.plot(x, actions_log[args_cli.follow_robot, :-1, 2], label="Action 3")
+                plt.legend(loc="best")
+                plt.subplot(2, 2, 4)
+                plt.plot(x, actions_log[args_cli.follow_robot, :-1, 3], label="Action 4")
+                plt.legend(loc="best")
+                plt.tight_layout()
+                save_path = video_folder_path + "/" + video_name + "_actions.png"
+                plt.savefig(save_path)
+                print(f"Saved actions plot to {save_path}")
+                plt.close(fig)
 
             envs.close()
             simulation_app.close()
 
     
-    
-
-
 if __name__ == "__main__":
     # run the main function
     main()
