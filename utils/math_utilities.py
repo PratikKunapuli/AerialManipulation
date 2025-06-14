@@ -183,7 +183,7 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     # same, calculate the angular error between them
     x_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))  
     dots = (x_1_transform * x_2).sum(dim=1)
-    ans = torch.abs(torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8))).reshape(-1, 1)
+    ans = torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8)).reshape(-1, 1)
     if torch.any(torch.isnan(ans)):
         mask = torch.isnan(ans).squeeze()
         print('found nans')
