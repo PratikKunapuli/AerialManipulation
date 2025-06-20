@@ -64,22 +64,58 @@ def body_yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     q1 = q1.reshape(-1, 4)
     q2 = q2.reshape(-1, 4)
 
-    
-    #Find vector "b2" that is the y-axis of the rotated frame
+    # Apply roatations to local y-axis for each frame. For the body frame, we'll also do this for the 
+    # negative y-axis since alignment can be achieved by having the body be either parallel or antiparallel
+    # to the target frame's y-axis
     b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    b1_neg = -1.0 * b1
     b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q2.device).tile((q2.shape[0], 1)))
 
-    # perform z-correction on goal orientations that have at least one nonzero horizontal (x or y) component
-    has_x = torch.nonzero(b2[:, 0])
-    has_y = torch.nonzero(b2[:, 1])
-    has_horiz = torch.cat((has_x, has_y)).unique()
-    b2[has_horiz, 2] = 0.0
-    b2 = torch.nn.functional.normalize(b2, dim=1)
+    # Only care about the horizontal components of the y-axes
+    b1[:, 2] = 0.0
+    b1_neg[:, 2] = 0.0
+    b2[:, 2] = 0.0
 
-    dots =(b1*b2).sum(dim=1)
-    dots = torch.reshape(dots, (-1, 1))
-    errors = torch.zeros_like(dots)
-    errors[has_horiz] = torch.arccos(torch.clamp(dots[has_horiz], -1.0+1e-8, 1.0-1e-8))
+    # Renormalize the vectors
+
+    # Use functional.normalize so that vectors below a certain magnitude normalize ot a length less than 1 
+    b1 = torch.nn.functional.normalize(b1, dim=1, eps=1e-8)
+    b1_neg = torch.nn.functional.normalize(b1_neg, dim=1, eps=1e-8)
+    b2 = torch.nn.functional.normalize(b2, dim=1, eps=1e-8)
+
+    dot = (b1*b2).sum(dim=1)
+    dot_neg = (b1_neg*b2).sum(dim=1)
+
+    yaw_error = torch.zeros_like(dot)
+    # If b2 is small in magnitude, this means that the target end effector frame is near-vertical, so aligntment
+    # can be achieved with any yaw angle. Only calculate the error if b2 is large enough
+    mask = torch.norm(b2, dim=1) < 1.0-1e-10
+
+    pos_error = torch.arccos(torch.clamp(dot, -1.0+1e-8, 1.0-1e-8))
+    neg_error = torch.arccos(torch.clamp(dot_neg, -1.0+1e-8, 1.0-1e-8))
+
+    yaw_error[torch.abs(pos_error) < torch.abs(neg_error)] = pos_error[torch.abs(pos_error) < torch.abs(neg_error)]
+    yaw_error[torch.abs(pos_error) >= torch.abs(neg_error)] = neg_error[torch.abs(pos_error) >= torch.abs(neg_error)]
+    yaw_error[mask] = 0.0
+
+    return yaw_error.reshape(-1, 1)
+
+    
+    #Find vector "b2" that is the y-axis of the rotated frame
+    # b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    # b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q2.device).tile((q2.shape[0], 1)))
+
+    # # perform z-correction on goal orientations that have at least one nonzero horizontal (x or y) component
+    # has_x = torch.nonzero(b2[:, 0])
+    # has_y = torch.nonzero(b2[:, 1])
+    # has_horiz = torch.cat((has_x, has_y)).unique()
+    # b2[has_horiz, 2] = 0.0
+    # b2 = torch.nn.functional.normalize(b2, dim=1)
+
+    # dots =(b1*b2).sum(dim=1)
+    # dots = torch.reshape(dots, (-1, 1))
+    # errors = torch.zeros_like(dots)
+    # errors[has_horiz] = torch.arccos(torch.clamp(dots[has_horiz], -1.0+1e-8, 1.0-1e-8))
     return torch.abs(errors)
 
 def calculate_required_shoulder(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
@@ -122,7 +158,7 @@ def shoulder_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     b1_shoulder_angles = torch.arcsin(torch.clamp(b1[:, -1], -1.0+1e-8, 1.0-1e-8))
     b2_shoulder_angles = torch.arcsin(torch.clamp(b2[:, -1], -1.0+1e-8, 1.0-1e-8))
 
-    return torch.abs(b2_shoulder_angles - b1_shoulder_angles)
+    return (b2_shoulder_angles - b1_shoulder_angles).reshape(-1, 1)
 
 def calculate_required_wrist(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
     '''

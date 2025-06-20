@@ -518,6 +518,21 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         Apply the curriculum to the environment.
         """
         # print("[Isaac Env: Curriculum] Total Timesteps: ", total_timesteps, " Pos Radius: ", self.cfg.pos_radius)
+        # if self.cfg.ee_pos_radius_curriculum > 0:
+        #     # half the pos radius every pos_radius_curriculum timesteps
+        #     self.cfg.ee_pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.ee_pos_radius_curriculum))
+        # if self.cfg.body_pos_radius_curriculum > 0:
+        #     # half the pos radius every pos_radius_curriculum timesteps
+        #     self.cfg.body_pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.body_pos_radius_curriculum))
+        # if self.cfg.ori_radius_curriculum > 0:
+        #     self.cfg.ori_radius = np.pi / 2.0 * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum))
+        # if self.cfg.yaw_radius_curriculum > 0:
+        #     self.cfg.yaw_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum))
+        # if self.cfg.shoulder_radius_curriculum > 0:
+        #     self.cfg.shoulder_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum))
+        # if self.cfg.wrist_radius_curriculum > 0:
+        #     self.cfg.wrist_radius = np.pi / 2.0 * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum))
+
         if self.cfg.ee_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
             self.cfg.ee_pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.ee_pos_radius_curriculum))
@@ -525,13 +540,14 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             # half the pos radius every pos_radius_curriculum timesteps
             self.cfg.body_pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.body_pos_radius_curriculum))
         if self.cfg.ori_radius_curriculum > 0:
-            self.cfg.ori_radius = np.pi / 2.0 * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum))
+            self.cfg.ori_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum))
         if self.cfg.yaw_radius_curriculum > 0:
             self.cfg.yaw_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum))
         if self.cfg.shoulder_radius_curriculum > 0:
             self.cfg.shoulder_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum))
         if self.cfg.wrist_radius_curriculum > 0:
-            self.cfg.wrist_radius = np.pi / 2.0 * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum))
+            self.cfg.wrist_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum))
+
 
     def _get_observations(self) -> torch.Dict[str, torch.Tensor | torch.Dict[str, torch.Tensor]]:
         """
@@ -540,7 +556,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         """
         self._apply_curriculum(self.common_step_counter * self.num_envs)
         
-        
+        # Get EE frame info
         base_pos_w, base_ori_w, lin_vel_w, ang_vel_w = self.get_frame_state_from_task(self.cfg.task_body)
         goal_pos_w, goal_ori_w = self.get_goal_state_from_task(self.cfg.goal_body)
 
@@ -556,6 +572,20 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             goal_pos_w, goal_ori_w
         )
         wrist_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
+
+        # Get vehicle frame info
+        body_pos_w, body_ori_w, body_lin_vel_w, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
+
+        # For quad body, we only care about the position error, so can use any orientation for calculating the frame transform
+        body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
+                                                          self._desired_body_pos, goal_ori_w)
+        body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
+        body_roll = torch.reshape(body_roll, (-1, 1))
+        body_pitch = torch.reshape(body_pitch, (-1, 1))
+
+        yaw_error = body_yaw_error_from_quats(base_ori_w, goal_ori_w)
+        shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
+
 
         # Compute the orientation error as a yaw error in the body frame
         # goal_yaw_w = yaw_quat(self._desired_ori_w)
@@ -589,7 +619,6 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         shoulder_joint_vel = torch.zeros(self.num_envs, 0, device=self.device)
         wrist_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
         wrist_joint_vel = torch.zeros(self.num_envs, 0, device=self.device)
-        body_pos_w, body_ori_w, body_lin_vel_w, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
         if self.cfg.num_joints > 0:
             shoulder_joint_pos = self._robot.data.joint_pos[:, self._shoulder_joint_idx].unsqueeze(1)
             shoulder_joint_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx].unsqueeze(1)
@@ -597,13 +626,16 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             wrist_joint_pos = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
             wrist_joint_vel = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
 
-        # to test if the network can learn the required wrist angle on its own, will explicitly tell give the goal orientation and the quadrotor body orientation
+        # to test if the network can learn the required wrist angle on its own, will explicitly tell give the goal orientation and the quadrotor body orientation (outdated)
         body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
         goal_ori_w_flattened_matrix = matrix_from_quat(goal_ori_w).flatten(-2, -1)
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
+                # body_pos_error,                             # (num_envs, 3) [3-5]
+                # ori_error_b,                                # (num_envs, 3) [6-8]
                 # ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
+                # body_ori_w,                                 # (num_envs, 4) [6-9]
                 body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
                 yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
                 goal_ori_w_flattened_matrix,                # [12-20]
@@ -611,10 +643,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
                 shoulder_joint_pos,                         # (num_envs, 1) [30]
-                wrist_error,                                # (num_envs, 1) [31]
+                # wrist_error,                                # (num_envs, 1) [31]
+                wrist_joint_pos,                            # (num_envs, 1) [34]
                 shoulder_joint_vel,                         # (num_envs, 1) [32]
                 wrist_joint_vel,                            # (num_envs, 1) [33]
-                wrist_joint_pos,                            # (num_envs, 1) [34]
             ],
             dim=-1                                          # (num_envs, 34)
         )
@@ -622,11 +654,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # additional critic observations for 2DOF case
         critic_obs = torch.clone(obs)
         if self.cfg.num_joints == 2:
-            body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
-                                                          self._desired_body_pos, goal_ori_w)
-            body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
-            body_roll = torch.reshape(body_roll, (-1, 1))
-            body_pitch = torch.reshape(body_pitch, (-1, 1))
+            
             critic_obs = torch.cat (
                 [
                     pos_error_b,                                # (num_envs, 3) [0-2]
@@ -693,11 +721,12 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     self._desired_ori_w,                        # (num_envs, 4) [33-36] 
                     self._actions,                              # (num_envs, 6) [37-42]
                     wrist_error,                                 # (num_envs, 1) [43]
-                    pos_error_b,
-                    body_pos_error,
-
+                    pos_error_b,                                # (num_envs, 3) [44-46]
+                    body_pos_error,                             # (num_envs, 3) [47-49]
+                    yaw_error,                                  # (num_envs, 1) [50]
+                    shoulder_error,                             # (num_envs, 1) [51]
                 ],
-                dim=-1                                          # (num_envs, 44)
+                dim=-1                                          # (num_envs, 52)
             )
         else:
             full_state = None

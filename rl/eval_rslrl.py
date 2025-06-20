@@ -484,8 +484,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 x = np.arange(T) * 0.02
                 plot_path = os.path.join(policy_path, "plots", "eval", f"robot{args_cli.follow_robot}")
                 plots = ["Policy shoulder", "Policy wrist", "Policy thrust", "Policy MX",
-                        "Policy MY", "Policy MZ", "Shoulder joint position", "Wrist joint position", "Wrist error"]
-                cols = [41, 42, 37, 38, 39, 40, 26, 27, 43]
+                        "Policy MY", "Policy MZ", "Shoulder joint position", "Wrist joint position", "Wrist error",
+                        "Shoulder error", "Yaw error"]
+                cols = [41, 42, 37, 38, 39, 40, 26, 27, 43, 51, 50]
                 os.makedirs(plot_path, exist_ok=True)
                 for i, plot in enumerate(plots):
                     fig, ax = plt.subplots()
