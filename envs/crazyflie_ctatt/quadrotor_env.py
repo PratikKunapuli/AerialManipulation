@@ -304,7 +304,7 @@ class BrushlessQuadrotorEnvCfg(QuadrotorEnvCfg):
     robot: ArticulationCfg = CRAZYFLIE_BRUSHLESS_CFG.replace(prim_path="/World/envs/env_.*/Robot")
 
     thrust_to_weight = 3.5
-    mass = 0.039 # 39 grams
+    mass = 0.040 # 39 grams
     Ixx = 3e-5
     Iyy = 3e-5
     Izz = 3.5e-5
@@ -334,10 +334,11 @@ class BrushlessQuadrotorEnvCfg(QuadrotorEnvCfg):
     arm_length = 0.05
     k_eta = 4.81e-8 # Measured from thrust stand data
     k_m = 7.8e-10 #unchanged
+    k_torque = 0.0 # Computed from sysID
     tau_m = 0.017 # slower motor dynamics
     motor_speed_min = 0.0
     motor_speed_max = 2500.0
-    init_motor_speed = 1000.0
+    init_motor_speed = 1000.0 # should be 0.1 if using SRT control mode
 
     kp_att = 3264.54 # 544
     kd_att = 361.58 # 46.64
@@ -348,7 +349,7 @@ class BrushlessQuadrotorEnvCfg(QuadrotorEnvCfg):
     body_rate_scale_xy = 10.0
     body_rate_scale_z = 2.5
 
-    control_mode = "CTBR" # "CTBM" or "CTATT" or "CTBR"
+    control_mode = "CTBR" # "CTBM" or "CTATT" or "CTBR" or "SRT"
 
     # task_body = "body"
     # goal_body = "body"
@@ -468,7 +469,10 @@ class QuadrotorEnv(DirectRLEnv):
             dim=1, 
         ).to(self.device)
         self._rotor_directions = torch.tensor([1, -1, 1, -1], device=self.device).tile(self.num_envs, 1)
-        self.k = self._k_m / self._k_eta
+        if self.cfg.k_torque > 0.0:
+            self.k = self.cfg.k_torque * torch.ones(self.num_envs, device=self.device)
+        else:
+            self.k = self._k_m / self._k_eta
         # test_cross =  torch.linalg.cross(self._rotor_positions, torch.tensor([0.0, 0.0, 1.0], device=self.device).tile(self.num_envs, 1, 1))[:,:, 0:2].transpose(-2,-1)
         # print(test_cross.shape)
 
@@ -688,6 +692,8 @@ class QuadrotorEnv(DirectRLEnv):
 
         self._action_history = torch.roll(self._action_history, shifts=1, dims=1) # roll the action history to make room for the new action
         self._action_history[:, 0] = self._actions.clone().clamp(-1.0, 1.0) # add the new action to the history
+        self.pd_loop_counter = 0
+
 
 
         # 0th action is collective thrust
@@ -706,12 +712,17 @@ class QuadrotorEnv(DirectRLEnv):
             # 3rd action is desired yaw rate            
             # compute wrench from desired body rates and current body rates using PD controller
             self._wrench_des[:,1:] = self._get_moment_from_ctbr(self._actions)
+        elif self.cfg.control_mode == "SRT":
+            # The SRT control mode uses the actions directly as motor speeds
+            # This is a simplified control mode for testing purposes
+            self._motor_speeds_des = (self._actions.clone() + 1.0 / 2.0) # rescale from [-1, 1] to [0, 1]
+            return
+
             
         else:
             raise NotImplementedError(f"Control mode {self.cfg.control_mode} is not implemented.")
 
         self._motor_speeds_des = self._compute_motor_speeds(self._wrench_des)
-        self.pd_loop_counter = 0
         # print("Desired Motor Speeds: ", self._motor_speeds_des[0])
         # print("Current Motor Speeds: ", self._motor_speeds[0])
 
@@ -735,7 +746,7 @@ class QuadrotorEnv(DirectRLEnv):
             return
 
         # Update PD loop at the appropriate rate (100Hz or whatever pd_loop_rate_hz is)
-        if self.pd_loop_counter % self.cfg.pd_loop_decimation == 0:
+        if self.pd_loop_counter % self.cfg.pd_loop_decimation == 0 and self.cfg.control_mode != "SRT":
             # Recompute wrench using CURRENT state but DELAYED actions
             if self.cfg.control_mode == "CTATT":
                 self._wrench_des[:,1:] = self._get_moment_from_ctatt(self._actions)
@@ -756,15 +767,17 @@ class QuadrotorEnv(DirectRLEnv):
 
         self.pd_loop_counter += 1
 
-        # print("--------------------")
-        # print("Input wrench: ", self._wrench_des[0])
-        # print("Motor speed des: ", self._motor_speeds_des.shape)
-        # print("Current motor speed (pre update): ", self._motor_speeds.shape)
-        motor_accel = torch.bmm((1.0/self._tau_m).reshape(self.num_envs, 1, 1), (self._motor_speeds_des - self._motor_speeds).unsqueeze(1)).squeeze(1) # (n_envs, 4)
-        # print("Motor acceleration: ", motor_accel.shape)
-        self._motor_speeds += motor_accel * self.physics_dt
-        self._motor_speeds = self._motor_speeds.clamp(self.cfg.motor_speed_min, self.cfg.motor_speed_max) # Motor saturation
-        # self._motor_speeds = self._motor_speeds_des # assume no delay to simplify the simulation
+
+        # Old Motor Dynamics
+        if self.cfg.control_mode != "SRT":       
+            motor_accel = torch.bmm((1.0/self._tau_m).reshape(self.num_envs, 1, 1), (self._motor_speeds_des - self._motor_speeds).unsqueeze(1)).squeeze(1) # (n_envs, 4)
+            self._motor_speeds += motor_accel * self.physics_dt
+            self._motor_speeds = self._motor_speeds.clamp(self.cfg.motor_speed_min, self.cfg.motor_speed_max) # Motor saturation
+        else:
+            # New Motor Dynamics --> Assumes motor speeds are between 0 and 1 (used for SRT control mode)
+            alpha = torch.exp(-self.physics_dt / self._tau_m).unsqueeze(-1) # Exponential decay factor
+            self._motor_speeds = alpha * self._motor_speeds + (1 - alpha) * self._motor_speeds_des # Update motor speeds with exponential decay
+
         motor_forces = self.cfg.k_eta * self._motor_speeds ** 2
    
         # wrench = torch.matmul(self.f_to_TM, motor_forces.t()).t()

@@ -21,9 +21,12 @@ class QuadrotorPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     empirical_normalization = False
     policy = RslRlPpoActorCriticCfg(
         init_noise_std=1.0,
-        actor_hidden_dims=[256, 256, 256],
-        critic_hidden_dims=[256, 256, 256],
-        activation="elu",
+        # actor_hidden_dims=[256, 256, 256],
+        # critic_hidden_dims=[256, 256, 256],
+        # activation="elu",
+        actor_hidden_dims=[64, 64],
+        critic_hidden_dims=[64, 64],
+        activation="tanh",
     )
     algorithm = RslRlPpoAlgorithmCfg(
         value_loss_coef=1.0,
