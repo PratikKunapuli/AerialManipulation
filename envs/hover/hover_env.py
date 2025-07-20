@@ -111,14 +111,15 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     ori_radius = 0.8
     ori_radius_curriculum = int(3e7) #int(2e7)
-    ori_distance_reward_scale = 15.0
+    ori_distance_reward_scale = 5.0
     ori_error_reward_scale = 0.0 # -0.5
 
-    lin_vel_reward_scale = -0.1 # -0.05
+    lin_vel_reward_scale = -0.5 # -0.05
     ang_vel_reward_scale = -0.1 # -0.01
     joint_vel_reward_scale = 0.0 # -0.01
     action_prop_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
+    previous_action_reward_scale = -0.1
     
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
@@ -134,7 +135,7 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     wrist_error_reward_scale = 0.0 #-2.0 
     wrist_radius = 0.8
     wrist_radius_curriculum = int(9e6)
-    wrist_distance_reward_scale = 0.1#1.0
+    wrist_distance_reward_scale = 5.0#1.0
 
     stay_alive_reward = 0.0
     crash_penalty = 0.0
@@ -327,6 +328,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Actions / Actuation interfaces
         self._actions = torch.zeros(self.num_envs, self.cfg.num_actions, device=self.device)
+        self._previous_actions = torch.zeros_like(self._actions)
         print("actions shape:", self._actions.shape)
         self._joint_torques = torch.zeros(self.num_envs, self._robot.num_joints, device=self.device)
         self._body_forces = torch.zeros(self.num_envs, 1, 3, device=self.device)
@@ -365,6 +367,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 "joint_vel",
                 "action_norm_prop",
                 "action_norm_joint",
+                "action_delta",
                 "stay_alive",
                 "crash_penalty"
             ]
@@ -386,6 +389,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 "joint_vel",
                 "action_norm_prop",
                 "action_norm_joint",
+                "action_delta",
                 "stay_alive",
                 "crash_penalty"
             ]
@@ -578,7 +582,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # For quad body, we only care about the position error, so can use any orientation for calculating the frame transform
         body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
-                                                          self._desired_body_pos, goal_ori_w)
+                                                          self._desired_body_pos, body_ori_w)
         body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
         body_roll = torch.reshape(body_roll, (-1, 1))
         body_pitch = torch.reshape(body_pitch, (-1, 1))
@@ -632,21 +636,23 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
-                # body_pos_error,                             # (num_envs, 3) [3-5]
+                body_pos_error,                             # (num_envs, 3) [3-5]
                 # ori_error_b,                                # (num_envs, 3) [6-8]
-                # ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
+                ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
                 # body_ori_w,                                 # (num_envs, 4) [6-9]
                 body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
-                yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
-                goal_ori_w_flattened_matrix,                # [12-20]
+                # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
+                # goal_ori_w_flattened_matrix,                # [12-20]
                 grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
-                shoulder_joint_pos,                         # (num_envs, 1) [30]
+                # shoulder_joint_pos,                         # (num_envs, 1) [30]
                 # wrist_error,                                # (num_envs, 1) [31]
-                wrist_joint_pos,                            # (num_envs, 1) [34]
+                # wrist_joint_pos,                            # (num_envs, 1) [34]
+                wrist_error,                                # (num_envs, 1) [32]
                 shoulder_joint_vel,                         # (num_envs, 1) [32]
                 wrist_joint_vel,                            # (num_envs, 1) [33]
+                self._previous_actions,                     # (num_envs, 4) [34-37]
             ],
             dim=-1                                          # (num_envs, 34)
         )
@@ -672,7 +678,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     # body_roll,
                     # body_pitch,
                     body_lin_vel_w,
-                    body_ang_vel_w
+                    body_ang_vel_w,
+                    self._previous_actions,
                 ],
                 dim=-1
             )
@@ -828,6 +835,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         action_prop_error = torch.norm(self._actions[:, :4], dim=1)
         action_joint_error = torch.norm(self._actions[:, -2:], dim=1)
 
+        action_delta_error = torch.norm(self._actions - self._previous_actions, dim=1)
+
+        self._previous_actions = self._actions.clone()
+
         if self.cfg.scale_reward_with_time:
             time_scale = 1.0 / self.cfg.policy_rate_hz
         else:
@@ -870,6 +881,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             # "joint_vel": combined_distance * self.cfg.joint_vel_reward_scale * time_scale,
             "action_norm_prop": action_prop_error * self.cfg.action_prop_norm_reward_scale * time_scale,
             "action_norm_joint": action_joint_error * self.cfg.action_joint_norm_reward_scale * time_scale,
+            "action_delta": action_delta_error * self.cfg.previous_action_reward_scale * time_scale,
             "stay_alive": torch.ones_like(ee_pos_error) * self.cfg.stay_alive_reward * time_scale,
             "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
         }
@@ -887,6 +899,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             "joint_vel": joint_vel_error,
             "action_norm_prop": action_prop_error,
             "action_norm_joint": action_joint_error,
+            "action_delta": action_delta_error,
             "stay_alive": torch.ones_like(ee_pos_error),
             "crash_penalty": self.reset_terminated[:].float(),
         }

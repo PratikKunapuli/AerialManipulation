@@ -184,8 +184,10 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
         q1: current EE rotation, (..., 4)
         q2: target EE rotation (..., 4)
 
-    Returns abs value of the error of the wrist angle
+    Returns the signed error of the wrist angle in radians
     '''
+    # NOTE: need to check whether the signs are technically correct, but if you are using this simply as say a metric or observation, it shouldn't matter
+    # as long as you're using the same sign convention when comparing trials
     
     shape1 = q1.shape
     shape2 = q2.shape
@@ -231,6 +233,13 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
         print(axis[mask])
         print('s_half where nan:')
         print(s_half[mask])
+
+    # Step 3: Get the sign of the error by taking cross products of the local x-axes (of the frames where the y-axes are aligned)
+    # and use the sign of the resultant product's y-component
+    cross = torch.linalg.cross(x_1_transform, x_2)
+    cross = isaac_math_utils.quat_rotate_inverse(q_12, cross)
+    sign = torch.sign(cross[:, 1])
+    ans[:, 0] *= sign
     return ans
 
 
