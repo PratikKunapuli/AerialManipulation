@@ -653,7 +653,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 wrist_error,                                # (num_envs, 1) [32]
                 shoulder_joint_vel,                         # (num_envs, 1) [32]
                 wrist_joint_vel,                            # (num_envs, 1) [33]
-                self._previous_actions,                     # (num_envs, 4) [34-37]
+                self._previous_actions,                     # (num_envs, 4) [34-37] <-, actually 6
             ],
             dim=-1                                          # (num_envs, 34)
         )
@@ -858,6 +858,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             joint_vel_error = joint_vel_error ** 2
             action_error = action_error ** 2
             combined_distance = combined_distance ** 2
+            # NOTE: didn't square the previous action error, that is in the traj tracking env though
 
         crash_penalty_time = self.cfg.crash_penalty * (self.max_episode_length - self.episode_length_buf)
 
