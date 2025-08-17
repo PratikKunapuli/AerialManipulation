@@ -140,9 +140,9 @@ def calculate_required_shoulder(q: torch.Tensor, angles: torch.Tensor, env_ids: 
 
 def shoulder_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     '''
-    compute the shoulder joint angle error from the ee orientation (q1) and goal orientation (q2)
+    Compute the signed shoulder joint angle error from the ee orientation (q1) and goal orientation (q2)
 
-    returns the error in radians
+    Returns the signed error in radians
     '''
     shape1 = q1.shape
     shape2 = q2.shape
@@ -323,7 +323,7 @@ def calculate_required_angles(q: torch.Tensor, angles: torch.Tensor, env_ids: to
 
 
 def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.Tensor:
-    """Get yaw error between two quaternions.
+    """Get unsigned yaw error between two quaternions.
 
     Args:
         q1: The first quaternion. Shape is (..., 4).
