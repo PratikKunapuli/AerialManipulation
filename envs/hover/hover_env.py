@@ -633,6 +633,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # to test if the network can learn the required wrist angle on its own, will explicitly tell give the goal orientation and the quadrotor body orientation (outdated)
         body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
         goal_ori_w_flattened_matrix = matrix_from_quat(goal_ori_w).flatten(-2, -1)
+        base_ori_w_flattened_matrix = matrix_from_quat(base_ori_w).flatten(-2, -1)
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
@@ -796,8 +797,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         else:
             # _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
             body_yaw = yaw_from_quat(body_ori_w)
-            yaw_error = self._desired_angles[:, 2:] - torch.reshape(body_yaw, (-1, 1))         
-            shoulder_joint_error = torch.linalg.norm(self._desired_angles[:, 0:1] - shoulder_joint_pos, dim=1)
+            yaw_error = yaw_error_from_quats(goal_ori_w, base_ori_w, 2).unsqueeze(1)
+            shoulder_joint_error = torch.abs(shoulder_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
             wrist_joint_error = torch.abs(wrist_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
             shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
             wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.cfg.wrist_radius)
