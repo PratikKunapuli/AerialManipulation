@@ -15,7 +15,7 @@ from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
 @configclass
 class QuadcopterPPORunnerCfg(RslRlOnPolicyRunnerCfg):
     num_steps_per_env = 32
-    max_iterations = 1000
+    max_iterations = 750
     save_interval = 50
     experiment_name = "AM_0DOF_Hover"
     empirical_normalization = False
