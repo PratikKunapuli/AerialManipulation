@@ -75,6 +75,73 @@ def eval_lissajous_curve(t: torch.Tensor, amp: torch.Tensor, freq: torch.Tensor,
 
     return pos, yaw
 
+@torch.jit.script
+def eval_lissajous_curve_6dof(t: torch.Tensor, amp: torch.Tensor, freq: torch.Tensor, phase: torch.Tensor, offset: torch.Tensor, derivatives: int = 0) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Evaluate Lissajous curves and their derivatives for multiple environments with local time. This is for a 6 DOF trajectory, meaning
+    that the orientation now also includes roll and pitch.
+
+    Args:
+        t: Local time samples for each environment. Shape: (n_envs, n_samples).
+        amp: Amplitudes. Shape: (n_envs, n_curves).
+        freq: Frequencies. Shape: (n_envs, n_curves).
+        phase: Phases. Shape: (n_envs, n_curves).
+        offset: Offsets. Shape: (n_envs, n_curves).
+        derivatives: Number of derivatives to compute (0 to 4).
+
+    Returns:
+        pos: Tensor containing the evaluated Lissajous curves and their derivatives.
+             Shape: (num_derivatives + 1, n_envs, 3, n_samples).
+        yaw: Tensor containing the yaw angles of the Lissajous curves.
+             Shape: (num_derivatives + 1, n_envs, n_samples).
+    """
+    num_envs, num_samples = t.shape
+    num_envs_amp, num_curves = amp.shape
+
+    # Validate that the number of environments matches between t and other parameters
+    assert num_envs == num_envs_amp, "Mismatch between number of environments in time and other parameters."
+
+    # Reshape and expand tensors to match the time dimension
+    amp = amp.unsqueeze(-1).expand(num_envs, num_curves, num_samples)
+    freq = freq.unsqueeze(-1).expand(num_envs, num_curves, num_samples)
+    phase = phase.unsqueeze(-1).expand(num_envs, num_curves, num_samples)
+    offset = offset.unsqueeze(-1).expand(num_envs, num_curves, num_samples)
+
+    # Compute theta, sin(theta), and cos(theta) for each environment
+    theta = freq * t.unsqueeze(1) + phase  # Shape: (n_envs, n_curves, n_samples)
+    sin_theta = torch.sin(theta)
+    cos_theta = torch.cos(theta)
+
+    # Initialize the list of results with the position (0th derivative)
+    curves = amp * sin_theta + offset
+    results = [curves]
+
+    # Compute derivatives up to the specified order
+    if derivatives >= 1:
+        first_derivative = amp * freq * cos_theta
+        results.append(first_derivative)
+
+    if derivatives >= 2:
+        second_derivative = -amp * freq.pow(2) * sin_theta
+        results.append(second_derivative)
+
+    if derivatives >= 3:
+        third_derivative = -amp * freq.pow(3) * cos_theta
+        results.append(third_derivative)
+
+    if derivatives >= 4:
+        fourth_derivative = amp * freq.pow(4) * sin_theta
+        results.append(fourth_derivative)
+
+    # Stack the results and split into position and Euler angles
+    full_data = torch.stack(results, dim=0)  # Shape: (num_derivatives + 1, n_envs, n_curves, n_samples)
+    pos = full_data[:, :, :3, :]             # Position curves (x, y, z)
+    roll = full_data[:, :, 3, :]              # Roll curves
+    pitch = full_data[:, :, 4, :]              # Pitch curves
+    yaw = full_data[:, :, 5, :]              # Yaw curves
+
+    return pos, roll, pitch, yaw
+
 # @torch.jit.script
 # def eval_polynomial_curve(t: torch.Tensor, coeffs: torch.Tensor, derivatives: int = 0) -> Tuple[torch.Tensor, torch.Tensor]:
 #     """
