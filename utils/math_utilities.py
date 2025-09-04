@@ -243,10 +243,6 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     return ans
 
 
-
-
-
-
 def calculate_required_yaw(q: torch.Tensor, yaw: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
     '''
     Calculates the quadrotor's required yaw angle given the goal orientation of the end effector frame at specified
@@ -323,7 +319,7 @@ def calculate_required_angles(q: torch.Tensor, angles: torch.Tensor, env_ids: to
 
 
 def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.Tensor:
-    """Get unsigned yaw error between two quaternions.
+    """Get signed yaw error between two quaternions.
 
     Args:
         q1: The first quaternion. Shape is (..., 4).
@@ -356,7 +352,11 @@ def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.T
     prod = b1_norm * b2_norm
     # operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
     reward[has_horiz] = dot[has_horiz] / prod[has_horiz]
-    return torch.arccos(torch.clamp(reward, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1])
+    error = torch.arccos(torch.clamp(reward, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1])
+    cross = torch.linalg.cross(b1, b2)
+    sign = torch.sign(cross[:, 2]) # z-component of the cross product determins the sign of the error
+    error *= sign
+    return error
 
 @torch.jit.script
 def quat_from_yaw(yaw: torch.Tensor) -> torch.Tensor:
