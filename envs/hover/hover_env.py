@@ -576,6 +576,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             goal_pos_w, goal_ori_w
         )
         wrist_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
+        yaw_error = yaw_error_from_quats(base_ori_w, goal_ori_w, dof=self.cfg.num_joints).unsqueeze(1)
+        shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
 
         # Get vehicle frame info
         body_pos_w, body_ori_w, body_lin_vel_w, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
@@ -586,10 +588,6 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
         body_roll = torch.reshape(body_roll, (-1, 1))
         body_pitch = torch.reshape(body_pitch, (-1, 1))
-
-        yaw_error = body_yaw_error_from_quats(base_ori_w, goal_ori_w)
-        shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
-
 
         # Compute the orientation error as a yaw error in the body frame
         # goal_yaw_w = yaw_quat(self._desired_ori_w)
@@ -796,17 +794,17 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         
         else:
             # _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
-            body_yaw = yaw_from_quat(body_ori_w)
-            yaw_error = yaw_error_from_quats(goal_ori_w, base_ori_w, 2).unsqueeze(1)
+            # body_yaw = yaw_from_quat(body_ori_w)
+            yaw_error = torch.abs(yaw_error_from_quats(goal_ori_w, base_ori_w, 2))
             shoulder_joint_error = torch.abs(shoulder_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
             wrist_joint_error = torch.abs(wrist_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
             shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
             wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.cfg.wrist_radius)
 
             # yaw_distance = (1.0 - torch.tanh(yaw_error / self.cfg.yaw_radius)) * smooth_transition_func
-        yaw_error = torch.linalg.norm(yaw_error, dim=1)
+        # yaw_error = torch.linalg.norm(yaw_error, dim=1)
         yaw_distance = torch.exp(- (yaw_error **2) / self.cfg.yaw_radius)
-        yaw_error = yaw_error * smooth_transition_func
+        # yaw_error = yaw_error * smooth_transition_func
 
         # combined_error = (pos_error)**2 + (yaw_error * self.arm_length)**2
         combined_error = ee_pos_error/self.cfg.goal_pos_range + (yaw_error/self.cfg.goal_yaw_range)*self.arm_length
