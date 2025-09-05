@@ -114,16 +114,54 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     trajectory_type = "lissaajous"
     trajectory_horizon = 10
     random_shift_trajectory = False
+    # TODO: this is not changed at this level using hydra args, happens once __init__ called for env
+    eval_trajectory = "yaw" or trajectory_type
 
-    # (x, y, z, roll, pitch, yaw)
-    lissajous_amplitudes = [0.5, 0.5, 0.25, np.pi / 3, np.pi / 3, np.pi / 4]
-    lissajous_amplitudes_rand_ranges = [0.5, 0.5, 0.25, np.pi / 3, np.pi / 3, np.pi / 4]
-    lissajous_frequencies = [1.0, 1.0, 0.5, np.pi / 20, np.pi / 10, np.pi / 10]
-    lissajous_frequencies_rand_ranges = [1.0, 1.0, 0.5, np.pi / 20, np.pi / 10, np.pi / 10]
-    lissajous_phases = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    lissajous_phases_rand_ranges = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    lissajous_offsets = [0.0, 0.0, 3.0, 0.0, 0.0, 0.0]
-    lissajous_offsets_rand_ranges = [0.0, 0.0, 3.0, 0.0, 0.0, 0.0]
+    # Easy to visualize known trajectories for eval:
+    if eval_trajectory == "shoulder":
+    # Trajectory where only shoulder angle should change:
+        lissajous_amplitudes = [0.0, 0.2, 0.2, np.pi / 2, 0.0, 0.0]
+        lissajous_amplitudes_rand_ranges = [0.0] * 6
+        lissajous_frequencies = [0.0, 0.5, 0.5, 0.5, 0.0, 0.0]
+        lissajous_frequencies_rand_ranges = [0.0] * 6
+        lissajous_phases = [0.0]*6
+        lissajous_phases_rand_ranges = [0.0]*6
+        lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        lissajous_offsets_rand_ranges = [0.0] * 6
+
+    elif eval_trajectory == "wrist":
+    # Trajectory where only wrist angle should change:
+        lissajous_amplitudes = [0.0, 0.0, 0.0, 0.0, np.pi / 2, 0.0]
+        lissajous_amplitudes_rand_ranges = [0.0] * 6
+        lissajous_frequencies = [0.0, 0.0, 0.0, 0.0, 0.5, 0.0]
+        lissajous_frequencies_rand_ranges = [0.0] * 6
+        lissajous_phases = [0.0]*6
+        lissajous_phases_rand_ranges = [0.0]*6
+        lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        lissajous_offsets_rand_ranges = [0.0] * 6
+
+    # Trajectory where only yaw angle should change:
+    elif eval_trajectory == "yaw":
+        lissajous_amplitudes = [0.2, 0.2, 0.0, 0.0, 0.0, np.pi / 2]
+        lissajous_amplitudes_rand_ranges = [0.0] * 6
+        lissajous_frequencies = [0.25, 0.25, 0.0, 0.0, 0.0, 0.25]
+        lissajous_frequencies_rand_ranges = [0.0] * 6
+        lissajous_phases = [0.0]*6
+        lissajous_phases_rand_ranges = [0.0]*6
+        lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
+        lissajous_offsets_rand_ranges = [0.0] * 6
+
+     # (x, y, z, roll, pitch, yaw)
+    else:
+        lissajous_amplitudes = [0.5, 0.5, 0.25, np.pi / 3, np.pi / 3, np.pi / 4]
+        lissajous_amplitudes_rand_ranges = [0.25, 0.25, 0.25, np.pi / 6, np.pi / 6, np.pi / 6]
+        lissajous_frequencies = [1.0, 1.0, 0.5, np.pi / 20, np.pi / 10, np.pi / 10]
+        lissajous_frequencies_rand_ranges = [0.5, 0.5, 0.5, np.pi / 20, np.pi / 10, np.pi / 10]
+        lissajous_phases = [0.0]*6
+        lissajous_phases_rand_ranges = [1.0]*6
+        lissajous_offsets = [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]
+        lissajous_offsets_rand_ranges = [0.5, 0.5, 0.25, np.pi / 4, np.pi / 4, np.pi / 4]
+
 
     polynomial_x_coefficients= [0.5, 0.5]
     polynomial_y_coefficients= [0.5, 0.5]
@@ -218,7 +256,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     use_full_ori_matrix = True
     use_yaw_representation = False
     use_previous_actions = True
-    use_yaw_representation_for_trajectory=True
+    use_yaw_representation_for_trajectory = False
     use_ang_vel_from_trajectory=True
 
     shoulder_joint_active = True
@@ -556,6 +594,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         print("COM Ori: ", com_ori)
         print("EE Pos: ", ee_pos)
         print("EE Ori: ", ee_ori)
+        print("Trajectory type: ", self.cfg.eval_trajectory)
 
 
         # get center of mass of whole system (vehicle + end effector)
@@ -710,6 +749,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                     )
             )
         elif self.cfg.trajectory_type == "polynomial":
+            # TODO: add roll and pitch polynomials to poly curves
             pos_traj, yaw_traj = traj_utils.eval_polynomial_curve(time, self.polynomial_coefficients, derivatives=4)
         elif self.cfg.trajectory_type == "combined":
             pos_lissajous, roll_lissajous, pitch_lissajous, yaw_lissajous = (
@@ -717,7 +757,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                     time, self.lissajous_amplitudes, self.lissajous_frequencies, self.lissajous_phases, self.lissajous_offsets, derivatives=4
                 )
             )
-            # TODO: add roll and pitch polynomials to traj utils, otherwise this will break
+            # TODO: add roll and pitch polynomials to poly curves, otherwise this will break
             pos_poly, roll_poly, pitch_poly, yaw_poly = traj_utils.eval_polynomial_curve(time, self.polynomial_coefficients, derivatives=4)
             pos_traj = pos_lissajous + pos_poly
             roll_traj = roll_lissajous + roll_poly
@@ -734,7 +774,6 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self._roll_traj = roll_traj
         self._pitch_traj = pitch_traj
         self._yaw_traj = yaw_traj
-        
         if self.cfg.random_shift_trajectory:
             # Ensure the shapes are compatible for broadcasting
             pos_shift = self._pos_shift.unsqueeze(-1)
@@ -876,7 +915,9 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_error_w)
         if self.cfg.use_ang_vel_from_trajectory and self.cfg.trajectory_horizon > 0:
             ang_vel_des = torch.zeros_like(ang_vel_w)
-            ang_vel_des[:,2] = self._yaw_traj[1, :, 0]
+            ang_vel_des[:, 0] = self._roll_traj[1, :, 0]
+            ang_vel_des[:, 1] = self._pitch_traj[1, :, 0]
+            ang_vel_des[:, 2] = self._yaw_traj[1, :, 0]
             ang_vel_error_w = ang_vel_des - ang_vel_w
         else:
             ang_vel_error_w = torch.zeros_like(ang_vel_w) - ang_vel_w
@@ -1096,7 +1137,9 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_error_w)
         if self.cfg.use_ang_vel_from_trajectory and self.cfg.trajectory_horizon > 0:
             ang_vel_des = torch.zeros_like(ang_vel_w)
-            ang_vel_des[:,2] = self._yaw_traj[1, :, 0]
+            ang_vel_des[:, 0] = self._roll_traj[1, :, 0]
+            ang_vel_des[:, 1] = self._pitch_traj[1, :, 0]
+            ang_vel_des[:, 2] = self._yaw_traj[1, :, 0]
             ang_vel_error_w = ang_vel_des - ang_vel_w
         else:
             ang_vel_error_w = torch.zeros_like(ang_vel_w) - ang_vel_w
