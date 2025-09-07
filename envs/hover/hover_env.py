@@ -15,7 +15,7 @@ from omni.isaac.lab.utils import configclass
 from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
 from omni.isaac.lab.utils.math import (subtract_frame_transforms, combine_frame_transforms, matrix_from_quat, quat_error_magnitude, 
                                         random_orientation, quat_inv, quat_rotate_inverse, quat_mul, yaw_quat, quat_conjugate,
-                                        quat_rotate, normalize, wrap_to_pi, euler_xyz_from_quat)
+                                        quat_rotate, normalize, wrap_to_pi, euler_xyz_from_quat, matrix_from_euler)
 from omni.isaac.lab_assets import CRAZYFLIE_CFG
 import gymnasium as gym
 import numpy as np
@@ -124,12 +124,12 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
     yaw_radius = 0.8
-    yaw_radius_curriculum = int(0) 
+    yaw_radius_curriculum = int(3e7) 
     yaw_smooth_transition_scale = 0.0
 
     shoulder_error_reward_scale = 0.0
     shoulder_radius = 0.8
-    shoulder_radius_curriculum = int(0)
+    shoulder_radius_curriculum = int(9e6)
     shoulder_distance_reward_scale = 0.0
     
     wrist_error_reward_scale = 0.0 #-2.0 
@@ -581,6 +581,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Get vehicle frame info
         body_pos_w, body_ori_w, body_lin_vel_w, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
+        body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
 
         # For quad body, we only care about the position error, so can use any orientation for calculating the frame transform
         body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
@@ -616,6 +617,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_w)
         ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_w)
 
+        # Do the same for the body frame
+        body_lin_vel_b = quat_rotate_inverse(body_ori_w, body_lin_vel_w)
+        body_ang_vel_b = quat_rotate_inverse(body_ori_w, body_ang_vel_w)
+
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
         shoulder_joint_vel = torch.zeros(self.num_envs, 0, device=self.device)
@@ -629,26 +634,33 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             wrist_joint_vel = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
 
         # to test if the network can learn the required wrist angle on its own, will explicitly tell give the goal orientation and the quadrotor body orientation (outdated)
-        body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
-        goal_ori_w_flattened_matrix = matrix_from_quat(goal_ori_w).flatten(-2, -1)
-        base_ori_w_flattened_matrix = matrix_from_quat(base_ori_w).flatten(-2, -1)
+        # body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
+        body_ori_error_b = torch.stack((body_roll, body_pitch, yaw_error), dim=1).squeeze(-1)
+        body_ori_error_b = matrix_from_euler(body_ori_error_b, convention="XYZ")
+        body_ori_error_b = body_ori_error_b.flatten(-2, -1)
+        # goal_ori_w_flattened_matrix = matrix_from_quat(goal_ori_w).flatten(-2, -1)
+        # base_ori_w_flattened_matrix = matrix_from_quat(base_ori_w).flatten(-2, -1)
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
                 body_pos_error,                             # (num_envs, 3) [3-5]
                 # ori_error_b,                                # (num_envs, 3) [6-8]
                 ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
+                # yaw_error,
+                # shoulder_error,
+                # wrist_error,
                 # body_ori_w,                                 # (num_envs, 4) [6-9]
-                body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
+                # body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
+                body_ori_error_b,
                 # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
                 # goal_ori_w_flattened_matrix,                # [12-20]
                 grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
                 # shoulder_joint_pos,                         # (num_envs, 1) [30]
-                # wrist_error,                                # (num_envs, 1) [31]
+                wrist_error,                                # (num_envs, 1) [31]
                 # wrist_joint_pos,                            # (num_envs, 1) [34]
-                wrist_error,                                # (num_envs, 1) [32]
+                # wrist_error,                                # (num_envs, 1) [32]
                 shoulder_joint_vel,                         # (num_envs, 1) [32]
                 wrist_joint_vel,                            # (num_envs, 1) [33]
                 self._previous_actions,                     # (num_envs, 4) [34-37] <-, actually 6
@@ -664,20 +676,23 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 [
                     pos_error_b,                                # (num_envs, 3) [0-2]
                     ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
-                    yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
+                    # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
                     grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
                     lin_vel_b,                                  # (num_envs, 3)
                     ang_vel_b,                                  # (num_envs, 3)
                     shoulder_joint_pos,                         # (num_envs, 1)
                     wrist_joint_pos,                            # (num_envs, 1)
+                    # yaw_error,
+                    # shoulder_error,
+                    wrist_error,
                     shoulder_joint_vel,                         # (num_envs, 1)
                     wrist_joint_vel,  
                     body_pos_error,
-                    body_ori_w_flattened_matrix,
+                    body_ori_error_b,
                     # body_roll,
                     # body_pitch,
-                    body_lin_vel_w,
-                    body_ang_vel_w,
+                    body_lin_vel_b,
+                    body_ang_vel_b,
                     self._previous_actions,
                 ],
                 dim=-1
