@@ -675,24 +675,24 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             critic_obs = torch.cat (
                 [
                     pos_error_b,                                # (num_envs, 3) [0-2]
+                    body_pos_error,
                     ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
+                    body_ori_error_b,
                     # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
                     grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
                     lin_vel_b,                                  # (num_envs, 3)
                     ang_vel_b,                                  # (num_envs, 3)
-                    shoulder_joint_pos,                         # (num_envs, 1)
-                    wrist_joint_pos,                            # (num_envs, 1)
+                    body_lin_vel_b,
+                    body_ang_vel_b,                    
+                    # shoulder_joint_pos,                         # (num_envs, 1)
+                    # wrist_joint_pos,                            # (num_envs, 1)
                     # yaw_error,
                     # shoulder_error,
                     wrist_error,
                     shoulder_joint_vel,                         # (num_envs, 1)
                     wrist_joint_vel,  
-                    body_pos_error,
-                    body_ori_error_b,
                     # body_roll,
                     # body_pitch,
-                    body_lin_vel_b,
-                    body_ang_vel_b,
                     self._previous_actions,
                 ],
                 dim=-1
