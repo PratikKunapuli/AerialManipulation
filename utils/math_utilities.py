@@ -158,7 +158,7 @@ def shoulder_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     b1_shoulder_angles = torch.arcsin(torch.clamp(b1[:, -1], -1.0+1e-8, 1.0-1e-8))
     b2_shoulder_angles = torch.arcsin(torch.clamp(b2[:, -1], -1.0+1e-8, 1.0-1e-8))
 
-    return (b2_shoulder_angles - b1_shoulder_angles).reshape(-1, 1)
+    return (b1_shoulder_angles - b2_shoulder_angles).reshape(-1, 1)
 
 def calculate_required_wrist(q: torch.Tensor, angles: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
     '''
@@ -236,7 +236,7 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
 
     # Step 3: Get the sign of the error by taking cross products of the local x-axes (of the frames where the y-axes are aligned)
     # and use the sign of the resultant product's y-component
-    cross = torch.linalg.cross(x_1_transform, x_2)
+    cross = torch.linalg.cross(x_2, x_1_transform)
     cross = isaac_math_utils.quat_rotate_inverse(q_12, cross)
     sign = torch.sign(cross[:, 1])
     ans[:, 0] *= sign
@@ -292,7 +292,9 @@ def calculate_required_pos(q: torch.Tensor, p_goal: torch.Tensor, p_guess: torch
         env_ids: Indices where updates are required
     '''
     # Get local y vector of the target frame in world coords
-    b = isaac_math_utils.quat_rotate(q[env_ids], torch.tensor([0.0, 1.0, 0.0], device=q.device).tile((q[env_ids].shape[0], 1)))
+    # print(q.shape)
+    # print(q[env_ids].shape, torch.tensor([0.0, 1.0, 0.0], device=q.device).tile((*q[env_ids].shape[:-1], 1)).shape)
+    b = isaac_math_utils.quat_rotate(q[env_ids], torch.tensor([0.0, 1.0, 0.0], device=q.device).tile((*q[env_ids].shape[:-1], 1)))
 
     # Subtract transformed vectors scaled by arm length from the goal position
     p_guess[env_ids] = p_goal[env_ids] - arm_length.item() * b
@@ -353,7 +355,7 @@ def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.T
     # operand = (b1*b2).sum(dim=1) / (b1_norm * b2_norm)
     reward[has_horiz] = dot[has_horiz] / prod[has_horiz]
     error = torch.arccos(torch.clamp(reward, -1.0+1e-8, 1.0-1e-8)).view(shape1[:-1])
-    cross = torch.linalg.cross(b1, b2)
+    cross = torch.linalg.cross(b2, b1)
     sign = torch.sign(cross[:, 2]) # z-component of the cross product determins the sign of the error
     error *= sign
     return error
