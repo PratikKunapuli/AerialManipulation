@@ -651,16 +651,20 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 # wrist_error,
                 # body_ori_w,                                 # (num_envs, 4) [6-9]
                 # body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
-                body_ori_error_b,
+                # body_ori_error_b,
                 # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
                 # goal_ori_w_flattened_matrix,                # [12-20]
                 grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
                 # shoulder_joint_pos,                         # (num_envs, 1) [30]
-                wrist_error,                                # (num_envs, 1) [31]
+                # wrist_error,                                # (num_envs, 1) [31]
+                # torch.cos(shoulder_joint_pos),
+                # torch.sin(shoulder_joint_pos),
+                # torch.cos(wrist_joint_pos),
+                # torch.sin(wrist_joint_pos),
                 # wrist_joint_pos,                            # (num_envs, 1) [34]
-                # wrist_error,                                # (num_envs, 1) [32]
+                wrist_error,                                # (num_envs, 1) [32]
                 shoulder_joint_vel,                         # (num_envs, 1) [32]
                 wrist_joint_vel,                            # (num_envs, 1) [33]
                 self._previous_actions,                     # (num_envs, 4) [34-37] <-, actually 6
@@ -689,6 +693,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     # yaw_error,
                     # shoulder_error,
                     wrist_error,
+                    # torch.cos(shoulder_joint_pos),
+                    # torch.sin(shoulder_joint_pos),
+                    # torch.cos(wrist_joint_pos),
+                    # torch.sin(wrist_joint_pos),
                     shoulder_joint_vel,                         # (num_envs, 1)
                     wrist_joint_vel,  
                     # body_roll,
@@ -701,21 +709,30 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # We also need the state information for other controllers like the decoupled controller.
         # This is the full state of the robot
         # print("[Isaac Env: Observations] \"Frame\" Pos: ", base_pos_w)
-        # quad_pos_w, quad_ori_w, quad_lin_vel_w, quad_ang_vel_w = self.get_frame_state_from_task("vehicle")
-        quad_pos_w, quad_ori_w, quad_lin_vel_w, quad_ang_vel_w = self.get_frame_state_from_task("COM")
+        quad_pos_w, quad_ori_w, quad_lin_vel_w, quad_ang_vel_w = self.get_frame_state_from_task("vehicle")
+        # quad_pos_w, quad_ori_w, quad_lin_vel_w, quad_ang_vel_w = self.get_frame_state_from_task("COM")
         ee_pos_w, ee_ori_w, ee_lin_vel_w, ee_ang_vel_w = self.get_frame_state_from_task("root")
         # print("[Isaac Env: Observations] Quad pos: ", quad_pos_w)
         # print("[Isaac Env: Observations] EE pos: ", ee_pos_w)
 
         if self.cfg.gc_mode:
+            id_rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).tile((self.num_envs, 1))
+            shoulder_angle_required = -shoulder_angle_error_from_quats(id_rotation, goal_ori_w)
+            wrist_angle_required = -wrist_angle_error_from_quats(id_rotation, goal_ori_w)
             gc_obs = torch.cat(
                 [
                     quad_pos_w,
                     quad_ori_w,
                     quad_lin_vel_w,
                     quad_ang_vel_w,
-                    goal_pos_w,
+                    self._desired_body_pos,
                     yaw_from_quat(goal_ori_w).unsqueeze(1),
+                    shoulder_angle_required,
+                    wrist_angle_required,
+                    shoulder_joint_pos,
+                    wrist_joint_pos,
+                    shoulder_joint_vel,
+                    wrist_joint_vel,
                 ],
                 dim=-1
             )

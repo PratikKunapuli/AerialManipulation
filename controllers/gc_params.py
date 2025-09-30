@@ -323,5 +323,46 @@ gc_params_dict = {
             "kd_att_gain_xy": 47.821,
             "kd_att_gain_z": 8.818,
         },
-    }
+    },
+
+    "Isaac-AerialManipulator-2DOF-Hover-v0" : {
+        "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
+        "controller_params": {
+            "kp_pos_gain_xy": 10.0,#43.507,
+            "kp_pos_gain_z": 5.0, #30.0,#24.167,
+            "kd_pos_gain_xy": 10.0,#15.129,
+            "kd_pos_gain_z": 10.0, #10.0,#6.081,
+            # "kp_att_gain_xy": 50.0, #998.777,
+            "kp_att_gain_x": 900.0,
+            "kp_att_gain_y": 900.0,
+            "kp_att_gain_z": 15.0, #18.230,
+            # "kd_att_gain_xy": 20.0, # #10.821,
+            "kd_att_gain_x": 75.0,
+            "kd_att_gain_y": 100.0,
+            "kd_att_gain_z": 75.0, #8.818,
+            "kp_shoulder_gain": 0.0, 
+            "kd_shoulder_gain": 0.0, 
+            "kp_wrist_gain": 1.0, 
+            "kd_wrist_gain": 1.0,
+            "feed_forward": False,
+            # "use_integral": True,
+        },
+    },
+
+    # Barely changed from original parameters
+    # "Isaac-AerialManipulator-2DOF-Hover-v0" : {
+    #     "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
+    #     "controller_params": {
+    #         "kp_pos_gain_xy": 43.507,
+    #         "kp_pos_gain_z": 30.0,#24.167,
+    #         "kd_pos_gain_xy": 15.129,
+    #         "kd_pos_gain_z": 10.0,#6.081,
+    #         "kp_att_gain_xy": 998.777,
+    #         "kp_att_gain_z": 18.230,
+    #         "kd_att_gain_xy": 10.821,
+    #         "kd_att_gain_z": 8.818,
+    #         "feed_forward": False,
+    #     },
+    # },
 }
+

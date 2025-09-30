@@ -76,7 +76,9 @@ class DecoupledController():
     def __init__(self, num_envs, num_dofs, vehicle_mass, arm_mass, inertia_tensor, pos_offset, ori_offset, print_debug=False, com_pos_w=None, device='cpu',
                   kp_pos_gain_xy=10.0, kp_pos_gain_z=20.0, kd_pos_gain_xy=7.0, kd_pos_gain_z=9.0, 
                   kp_att_gain_xy=400.0, kp_att_gain_z=2.0, kd_att_gain_xy=70.0, kd_att_gain_z=2.0,
+                  kp_att_gain_x=None, kp_att_gain_y=None, kd_att_gain_x=None, kd_att_gain_y=None,
                   ki_pos_gain_xy=0.0, ki_pos_gain_z=0.0, ki_att_gain_xy=0.0, ki_att_gain_z=0.0,
+                  kp_shoulder_gain=0.1, kd_shoulder_gain=1.0, kp_wrist_gain=0.1, kd_wrist_gain=1.0,
                   tuning_mode=False, use_full_obs=False, skip_precompute=False, vehicle="AM", control_mode="CTBM", policy_dt=0.02,
                   feed_forward=False, use_integral = False, disable_gravity=False, **kwargs):
         self.num_envs = num_envs
@@ -106,6 +108,8 @@ class DecoupledController():
             self.moment_scale_z = 0.025 #0.025 # 0.1
             # self.moment_scale_z = 0.5 #0.025 # 0.1
             self.thrust_to_weight = 3.0
+            self.shoulder_torque_scalar = 0.6
+            self.wrist_torque_scalar = 0.3
         else:
             #Crazyflie
             self.thrust_to_weight = 1.8
@@ -116,7 +120,11 @@ class DecoupledController():
             self.attitude_scale_xy = 0.2
 
         self.device = torch.device(device)
-        self.inertia_tensor.to(self.device)
+        self.inertia_tensor = self.inertia_tensor.to(self.device)
+
+        if num_dofs > 0:
+            l_arm = 0.2
+            self.arm_inertia = arm_mass/3 * torch.diag(torch.tensor([l_arm**2, 0.0, l_arm**2])).to(self.device)
         
         self.initial_yaw_offset = torch.tensor([[0.7071, 0, 0, -0.7071]], device=self.device)
 
@@ -130,16 +138,42 @@ class DecoupledController():
         # self.kp_att = torch.tensor([400.0, 400.0, 2.0], device=self.device) 
         # self.kd_att = torch.tensor([70.0, 70.0, 2.0], device=self.device)
 
+        if kp_att_gain_x is None:
+            kp_att_gain_x = kp_att_gain_xy
+        if kp_att_gain_y is None:
+            kp_att_gain_y = kp_att_gain_xy
+        if kd_att_gain_x is None:
+            kd_att_gain_x = kd_att_gain_xy
+        if kd_att_gain_y is None:
+            kd_att_gain_y = kd_att_gain_xy
+
         self.kp_pos = torch.tensor([kp_pos_gain_xy, kp_pos_gain_xy, kp_pos_gain_z], device=self.device)
         self.kd_pos = torch.tensor([kd_pos_gain_xy, kd_pos_gain_xy, kd_pos_gain_z], device=self.device)
-        self.kp_att = torch.tensor([kp_att_gain_xy, kp_att_gain_xy, kp_att_gain_z], device=self.device)
-        self.kd_att = torch.tensor([kd_att_gain_xy, kd_att_gain_xy, kd_att_gain_z], device=self.device)
+        self.kp_att = torch.tensor([kp_att_gain_x, kp_att_gain_y, kp_att_gain_z], device=self.device)
+        self.kd_att = torch.tensor([kd_att_gain_x, kd_att_gain_y, kd_att_gain_z], device=self.device)
         self.ki_pos = torch.tensor([ki_pos_gain_xy, ki_pos_gain_xy, ki_pos_gain_z], device=self.device)
         self.ki_att = torch.tensor([ki_att_gain_xy, ki_att_gain_xy, ki_att_gain_z], device=self.device)
+
+        self.kp_shoulder = torch.tensor([kp_shoulder_gain], device=self.device)
+        self.kd_shoulder = torch.tensor([kd_shoulder_gain], device=self.device)
+        self.kp_wrist = torch.tensor([kp_wrist_gain], device=self.device)
+        self.kd_wrist = torch.tensor([kd_wrist_gain], device=self.device)
 
         self.pos_error_integral = torch.zeros(num_envs, 3, device=self.device)
         self.att_error_integral = torch.zeros(num_envs, 3, device=self.device)
 
+        # For L1 Adaptation (body only, no EE):
+        self.z_est = torch.zeros(num_envs, 6, device=self.device) # Estimated velocities
+        self.d_hat = torch.zeros(num_envs, 6, device=self.device) # Estimated disturbances
+        self.u_ad = torch.zeros(num_envs, 4, device=self.device) # Estimated augmentations
+        # self.A = -20.0 * torch.eye(6, device=self.device).tile(num_envs,1,1)
+        self.A =  torch.diag(torch.tensor([-25.0] * 3 + [-10.0, -1.0, -25.0], device=self.device)).tile(num_envs,1,1)
+        self.expA = torch.linalg.matrix_exp(self.A * self.policy_dt)
+        self.A_inv = torch.linalg.inv(self.A)
+        self.phi = torch.bmm(self.A_inv, self.expA - torch.eye(6, device=self.device).tile(num_envs,1,1))
+        self.phi_inv = torch.linalg.inv(self.phi)
+        self.lpf_alphas = torch.tensor([0.8] + [0.8, 0.8, 0.8], device=self.device)
+        # breakpoint(),
 
         # self.kp_pos = torch.tensor([7.5, 15.0, 20.0], device=self.device)
         # self.kd_pos = torch.tensor([15.0, 8.0, 9.0], device=self.device)
@@ -492,6 +526,15 @@ class DecoupledController():
         # Compute desired moments
         # M = I @ (-kp_att * att_err - kd_att * omega_err) + omega x I @ omega
         inertia = self.inertia_tensor.unsqueeze(0).tile(batch_size, 1, 1).to(self.device)
+        if self.num_dofs > 0:
+            ee_inertia = self.arm_inertia.unsqueeze(0).tile(batch_size, 1, 1).to(self.device)
+            shoulder_angle = obs[:, 19]
+            total_angles = torch.zeros((batch_size, 3), device=self.device)
+            total_angles[:, 0] = shoulder_angle
+            R_mat = isaac_math_utils.matrix_from_euler(total_angles, "XYZ")
+            ee_inertia = torch.bmm(R_mat, ee_inertia)
+            ee_inertia = torch.bmm(ee_inertia, R_mat.transpose(-2, -1))
+            inertia = inertia + ee_inertia
         att_pd = -self.kp_att * att_err - self.kd_att * omega_err  - self.ki_att * att_err_integral
         I_omega = torch.bmm(inertia.view(batch_size, 3, 3), quad_omega.unsqueeze(2)).squeeze(2).to(self.device)
 
@@ -655,6 +698,40 @@ class DecoupledController():
         # print(M_des.shape)
 
         if self.control_mode == "CTBM":
+            if self.num_dofs == 2:
+                shoulder_angle_des = obs[:, 17]
+                wrist_angle_des = obs[:, 18]
+                shoulder_joint_pos = obs[:, 19]
+                wrist_joint_pos = obs[:, 20]
+                shoulder_joint_vel_error = obs[:, 21]
+                wrist_joint_vel_error = obs[:, 22]
+                # breakpoint()
+                u = torch.cat([collective_thrust.view(batch_size, 1), M_des], dim=1)
+                # u_adapt = self.L1_Adaptive(obs, u)
+                # u = u + u_adapt
+                # breakpoint()
+                shoulder_error = shoulder_joint_pos - shoulder_angle_des
+                wrist_error = wrist_joint_pos - wrist_angle_des
+                u[:, 0] = self.rescale_command(u[:, 0], 0.0, self.thrust_to_weight * 9.81*self.mass)
+                u[:, 1:3] = self.rescale_command(u[:, 1:3], -self.moment_scale_xy, self.moment_scale_xy)
+                u[:, 3] = self.rescale_command(u[:, 3], -self.moment_scale_z, self.moment_scale_z)
+                # # breakpoint()
+                # # TODO: for now, padding with zeros
+                # u1 = self.rescale_command(collective_thrust, 0.0, self.thrust_to_weight * 9.81*self.mass).view(batch_size, 1)
+                # u2 = self.rescale_command(M_des[:, 0], -self.moment_scale_xy, self.moment_scale_xy).view(batch_size, 1)
+                # u3 = self.rescale_command(M_des[:, 1], -self.moment_scale_xy, self.moment_scale_xy).view(batch_size, 1)
+                # # u4 = self.rescale_command(M_des[:, 2], -self.moment_scale_z, self.moment_scale_z).view(batch_size, 1)
+                u_shoulder = -self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel_error
+                u_wrist = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel_error
+                u_shoulder = self.rescale_command(u_shoulder, -self.shoulder_torque_scalar, self.shoulder_torque_scalar).unsqueeze(-1)
+                u_wrist = self.rescale_command(u_wrist, -self.wrist_torque_scalar, self.wrist_torque_scalar).unsqueeze(-1)
+                u_arm = torch.cat([u_shoulder, u_wrist], dim=1)
+                # u_arm = torch.zeros(batch_size, 2, device=self.device)
+                # u =  torch.cat([u1, u2, u3, u4, u_arm], dim=1)
+                u = torch.cat([u, u_arm], dim=1)
+            
+                return u
+            
             u1 = self.rescale_command(collective_thrust, 0.0, self.thrust_to_weight * 9.81*self.mass).view(batch_size, 1)
             u2 = self.rescale_command(M_des[:, 0], -self.moment_scale_xy, self.moment_scale_xy).view(batch_size, 1)
             u3 = self.rescale_command(M_des[:, 1], -self.moment_scale_xy, self.moment_scale_xy).view(batch_size, 1)
@@ -671,6 +748,101 @@ class DecoupledController():
         # import code; code.interact(local=locals())
 
         return torch.stack([u1, u2, u3, u4], dim=1).view(batch_size, 4)
+    
+    # NOTE: not used
+    def L1_Adaptive(self, obs, u_ref):
+        if self.use_full_obs:
+            goal_pos_w = obs[:, 26+self.num_dofs*2:26+self.num_dofs*2 + 3]
+            goal_ori_w = obs[:, 26+self.num_dofs*2 + 3:26+self.num_dofs*2 + 7]
+            ee_pos = obs[:, 13:16]
+            ee_ori_quat = obs[:, 16:20]
+            ee_vel = obs[:, 20:23]
+            ee_omega = obs[:, 23:26]
+            com_pos = obs[:, :3]
+            com_ori_quat = obs[:, 3:7]
+            com_vel = obs[:, 7:10]
+            com_omega = obs[:, 10:13].to(self.device)
+            batch_size = obs.shape[0]
+        else:
+            batch_size = obs.shape[0]
+            num_obs = obs.shape[1]
+            com_pos = obs[:, :3]
+            com_ori_quat = obs[:, 3:7]
+            com_vel = obs[:, 7:10]
+            com_omega = obs[:, 10:13]
+            desired_pos = obs[:, 13:16]
+            desired_yaw = obs[:, 16:17]
+            reset_ids = obs[:, 17:]
+        
+        reset_ids = reset_ids.squeeze(-1)
+        self.z_est[reset_ids == 1.0] = 0.0
+        self.d_hat[reset_ids == 1.0] = 0.0
+
+        # breakpoint()
+
+        # NOTE: reference paper has +z pointing down, so somes are flipped from the paper - actually, am unsure of this
+        com_omega_body = isaac_math_utils.quat_rotate_inverse(com_ori_quat, com_omega)
+
+        # Preliminary calculations
+        f = torch.zeros(batch_size, 6, device=self.device)
+        f[:, :3] = -self.gravity
+        J_inv = torch.linalg.inv(self.inertia_tensor)
+        # f[:, 3:6] = torch.linalg.cross(
+        #     torch.bmm(-J_inv.tile(batch_size, 1, 1), com_omega_body.unsqueeze(-1)).squeeze(-1),
+        #     torch.bmm(self.inertia_tensor.tile(batch_size, 1, 1), com_omega_body.unsqueeze(-1)).squeeze(-1)
+        # )
+        # breakpoint()
+        f[:, 3:6] = torch.bmm(-J_inv.tile(batch_size, 1, 1), torch.linalg.cross(
+            com_omega_body,
+            torch.bmm(self.inertia_tensor.tile(batch_size, 1, 1), com_omega_body.unsqueeze(-1)).squeeze(-1)
+        ).unsqueeze(-1)).squeeze(-1)
+
+        B = torch.zeros(batch_size, 6, 4, device=self.device)
+        z_body = torch.tensor([0.0, 0.0, 1.0], device=self.device).tile(batch_size, 1)
+        z_world = isaac_math_utils.quat_rotate(com_ori_quat, z_body)
+        B[:, :3, 0] = z_world / self.mass
+        B[:, 3:6, 1:4] = J_inv.tile(batch_size, 1, 1)
+
+        B_perp = torch.zeros(batch_size, 6, 2, device=self.device)
+        x_body = torch.tensor([1.0, 0.0, 0.0], device=self.device).tile(batch_size, 1)
+        y_body = torch.tensor([0.0, 1.0, 0.0], device=self.device).tile(batch_size, 1)
+        x_world = isaac_math_utils.quat_rotate(com_ori_quat, x_body)
+        y_world = isaac_math_utils.quat_rotate(com_ori_quat, y_body)
+        B_perp[:, :3, 0] = x_world / self.mass
+        B_perp[:, :3, 1] = y_world / self.mass
+
+        B_bar = torch.cat([B, B_perp], dim=2)
+
+        # Adaptation for this loop
+        # g.t. velocity z = [v, Omega]
+        z = torch.cat([com_vel, com_omega_body], dim=1)
+        z_tilde = (self.z_est - z).unsqueeze(-1)
+
+        d_hat = -torch.bmm(torch.linalg.inv(B_bar), torch.bmm(self.phi_inv, torch.bmm(self.expA, z_tilde))).squeeze(-1)
+        # breakpoint()
+        # d_hat = d_hat.clamp(-10.0, 10.0)
+        # self.d_hat = self.d_hat.clamp(-50.0, 50.0)
+        # alpha = 0.99
+        self.u_ad = -(self.lpf_alphas * self.d_hat[:,:4] + (1 - self.lpf_alphas) * d_hat[:, :4])
+        self.d_hat = d_hat
+
+        # State estimation for nexxt loop
+        z_hat_dot = (
+            f +
+            torch.bmm(B, u_ref.unsqueeze(-1) + self.u_ad.unsqueeze(-1) + self.d_hat[:, :4].unsqueeze(-1)).squeeze(-1) + 
+            torch.bmm(B_perp, self.d_hat[:, 4:].unsqueeze(-1)).squeeze(-1) +
+            torch.bmm(self.A, z_tilde).squeeze(-1)
+        )
+        self.z_est += z_hat_dot * self.policy_dt
+        # self.z_est = self.z_est.clamp(-50.0, 50.0)
+        # self.z_est = self.z_est.clamp(-10.0, 10.0)
+        print("Z tilde best cases: ", torch.abs(z_tilde.squeeze(-1)).min(dim=0)[0])
+        print("Z tilde worst cases: ", torch.abs(z_tilde.squeeze(-1)).max(dim=0)[0])
+        print("Z tilde mean: ", torch.abs(z_tilde.squeeze(-1)).mean(dim=0))
+        # breakpoint()
+        # u_ad = self.u_ad.clone()
+        # u_ad[:, 1:] *= -1.0
+        return self.u_ad
 
     def log_buffers(self):
         self.s_buffer = torch.stack(self.s_buffer, dim=0)
@@ -693,3 +865,229 @@ class DecoupledController():
         torch.save(self.s_dot_des_buffer, "s_dot_des_buffer.pt")
         torch.save(self.ref_pos_buffer, "ref_pos_buffer.pt")
         torch.save(self.pos_buffer, "pos_buffer.pt")
+
+# L1 reference implementation:
+# L1 augmentation for underactuated quadrotor (PyTorch)
+# Uses the piecewise-constant adaptation law (paper Eq. 8) + LPF (Eq. 9).
+# Inputs/outputs are batched (batch, ...).
+
+import torch
+
+EPS = 1e-12
+
+def skew(v):
+    # v: (batch,3) -> returns (batch,3,3)
+    B = torch.zeros(v.shape[0], 3, 3, device=v.device, dtype=v.dtype)
+    B[:, 0, 1] = -v[:, 2]
+    B[:, 0, 2] = v[:, 1]
+    B[:, 1, 0] = v[:, 2]
+    B[:, 1, 2] = -v[:, 0]
+    B[:, 2, 0] = -v[:, 1]
+    B[:, 2, 1] = v[:, 0]
+    return B
+
+def hat_inv(S):
+    # S: (batch,3,3) skew -> (batch,3)
+    return torch.stack([S[:, 2, 1], S[:, 0, 2], S[:, 1, 0]], dim=1)
+
+class L1QuadAugmentor:
+    def __init__(self, vehicle_mass, inertia_tensor, Ts, As_diag, lpf_cutoff_freq, device='cpu', dtype=torch.float32):
+        """
+        vehicle_mass: scalar
+        inertia_tensor: (3,3) torch tensor (body-frame inertia)
+        Ts: adaptation sampling time (s) (piecewise-constant update interval)
+        As_diag: length-6 tensor or list for diag(As) positive numbers (As = -diag(As_diag))
+                 convention: As elements should be positive scalars a_i so As_matrix = -diag(a_i)
+        lpf_cutoff_freq: scalar (rad/s) for first-order LPF applied to matched estimate (continuous)
+        """
+        self.device = device
+        self.dtype = dtype
+        self.m = float(vehicle_mass)
+        self.J = torch.tensor(inertia_tensor, device=device, dtype=dtype)
+        # As diag vector (positive values a_i, actual As = -diag(a_i))
+        self.a_vec = torch.tensor(As_diag, device=device, dtype=dtype).flatten()  # (6,)
+        assert self.a_vec.shape[0] == 6
+        self.Ts = float(Ts)
+        # Prepare discrete-time terms used in adaptation formula
+        # exp(As Ts) with As = -diag(a_vec) -> diagonal with exp(-a_i Ts)
+        self.expAsTs = torch.exp(-self.a_vec * self.Ts)  # (6,)
+        # Phi = As^{-1} (exp(As Ts) - I)  -> with As = -diag(a), Phi_i = (-a_i)^{-1} (exp(-a_i Ts) - 1)
+        # but in paper they define Phi = A_s^{-1} (exp(A_s Ts) - I)
+        # We'll compute Phi and its inverse safely (elementwise)
+        denom = (self.expAsTs - 1.0)
+        # avoid near-zero denom
+        denom_safe = torch.where(denom.abs() < EPS, denom.sign() * EPS, denom)
+        # Phi diagonal entries
+        self.Phi_diag = (-1.0 / self.a_vec) * denom  # (6,)
+        # inverse of Phi diagonal
+        self.Phi_inv_diag = 1.0 / self.Phi_diag
+        # For numerical safety, clamp extremes
+        self.Phi_inv_diag = torch.clamp(self.Phi_inv_diag, -1e8, 1e8)
+        # LPF design: first-order continuous C(s) = wc/(s+wc).
+        # discrete-time bilinear/Tustin or backward-Euler approx for simplicity:
+        # we will implement discrete LPF: x_k = alpha * x_{k-1} + (1-alpha) * new, where alpha = exp(-wc*Ts)
+        wc = float(lpf_cutoff_freq)
+        self.lpf_alpha = float(torch.exp(torch.tensor(-wc * self.Ts, device=device, dtype=dtype)))
+        # internal states (will be initialized on first call)
+        self.initialized = False
+        self.dtype = dtype
+
+    def init_states(self, batch_size):
+        device = self.device
+        dtype = self.dtype
+        # predictor partial state z_hat (v_hat, Omega_hat) shape (batch,6)
+        self.z_hat = torch.zeros(batch_size, 6, device=device, dtype=dtype)
+        # predictor error z_tilde = z_hat - z (not stored separately)
+        # matched + unmatched estimates (sigma_m_hat (3 for force), sigma_um_hat (3 for unmatched))
+        # Concatenate to 6-vector sigma_hat = [sigma_m; sigma_um]
+        self.sigma_hat = torch.zeros(batch_size, 6, device=device, dtype=dtype)
+        # filtered matched estimate (3-vector) used in control after LPF
+        self.sigma_m_hat_filtered = torch.zeros(batch_size, 3, device=device, dtype=dtype)
+        self.initialized = True
+
+    def compute_B_and_Bperp(self, R):
+        # R: (batch,3,3) rotation from body->world
+        # B(R) = [ -m^{-1} R e3 ,  0_{3x3} ; 0_{3x1}, J^{-1} ] as in paper (but arranged to map ub = [f ; M])
+        # We'll return Bbar = [B(R), B_perp(R)] as a (batch,6,6) square matrix where the first 3 cols = matched f->v, etc.
+        batch = R.shape[0]
+        e3 = torch.tensor([0.0, 0.0, 1.0], device=R.device, dtype=R.dtype)
+        Re3 = torch.matmul(R, e3)     # (batch,3)
+        # Top-left 3x1 block = -m^{-1} * Re3 (maps scalar f to translational acceleration)
+        B1 = (-1.0 / self.m) * Re3.unsqueeze(-1)  # (batch,3,1)
+        zeros_3x3 = torch.zeros(batch, 3, 3, device=R.device, dtype=R.dtype)
+        # Top-right 3x3 is zeros (moments don't directly affect translational acceleration in model)
+        top = torch.cat([B1, zeros_3x3], dim=2)  # (batch,3,4) -- but note paper stacks matched/unmatched differently
+        # Bottom-left 3x1 block is zeros (f does not instantaneously affect body angular acceleration)
+        # Bottom-right 3x3 is J^{-1} mapping moments to angular accel in body frame (but recall Omega dynamics uses J^{-1}(M - Omega x J Omega))
+        Jinv = torch.inverse(self.J).unsqueeze(0).repeat(batch, 1, 1)  # (batch,3,3)
+        bottom = torch.cat([torch.zeros(batch, 3, 1, device=R.device, dtype=R.dtype), Jinv], dim=2)  # (batch,3,4)
+        # Now B (batch,6,4) mapping ub=[f;M] to z_dot contribution. But in paper they stack B and B_perp to build 6x6 square.
+        # For simplicity, build Bbar = [B | B_perp] (6x6) where B_perp is constructed so Bbar is full rank.
+        # Paper constructs a full-rank Bbar by choosing B_perp such that Bbar is invertible; an easy choice:
+        # choose B_perp columns that complete the span (e.g., pick body x,y directions for force unmatched channels).
+        # Here we follow the paper's structure in spirit: create Bbar = [B, B_perp] as a (6,6) with first 4 cols B and next 2 cols some independent vectors.
+        # Simpler practical approach: form Bbar as block-diagonal-ish:
+        B = torch.cat([top, bottom], dim=1)  # (batch,6,4)
+        # Create B_perp so that Bbar is square (6x6). We'll append two basis columns that span translational xy (Re1, Re2)
+        Re1 = torch.matmul(R, torch.tensor([1.0, 0.0, 0.0], device=R.device, dtype=R.dtype))
+        Re2 = torch.matmul(R, torch.tensor([0.0, 1.0, 0.0], device=R.device, dtype=R.dtype))
+        # create two 6x1 columns: [Re1; 0] and [Re2; 0]
+        col1 = torch.cat([Re1.unsqueeze(-1), torch.zeros(batch, 3, 1, device=R.device, dtype=R.dtype)], dim=1)  # (batch,6,1)
+        col2 = torch.cat([Re2.unsqueeze(-1), torch.zeros(batch, 3, 1, device=R.device, dtype=R.dtype)], dim=1)
+        Bperp = torch.cat([col1, col2], dim=2)  # (batch,6,2)
+        Bbar = torch.cat([B, Bperp], dim=2)     # (batch,6,6)
+        return Bbar
+
+    def step(self, z, R, ub, baseline_aux=None):
+        """
+        Single L1 update step (discrete, piecewise-constant adaptation).
+        Inputs:
+          z: partial state concatenation [v (world), Omega (body)] shape (batch,6) -- matches paper's z
+          R: rotation body->world (batch,3,3)
+          ub: baseline controller output vector [f (scalar), M (3)] shape (batch,4)
+        Returns:
+          u_ad: augmentation in body frame [f_L1 (scalar), M_L1 (3)] shape (batch,4)
+        Notes:
+          - must call init_states(batch) once before first call
+        """
+        if not self.initialized:
+            self.init_states(z.shape[0])
+
+        batch = z.shape[0]
+        device = z.device
+        dtype = z.dtype
+
+        # Predictor: z_hat_dot = f(z) + B(R) (ub + u_ad + sigma_m_hat) + B_perp sigma_um_hat + As z_tilde
+        # but adaptation law requires z_tilde = z_hat - z at the adaptation instant; we follow the piecewise constant law:
+        # compute z_tilde at sampling instant
+        z_tilde = self.z_hat - z  # (batch,6)
+
+        # Build Bbar (batch,6,6)
+        Bbar = self.compute_B_and_Bperp(R)  # (batch,6,6)
+
+        # Adaptation law (piecewise-constant): sigma_hat = - Bbar^{-1} Phi^{-1} mu
+        # with mu = exp(As Ts) * z_tilde (paper uses exp(As Ts) * z_tilde)
+        # Using diagonal As = -diag(a_vec): expAsTs is elementwise computed
+        # mu = expAsTs * z_tilde (elementwise multiply along 6 dims)
+        mu = z_tilde * self.expAsTs.unsqueeze(0)  # (batch,6)
+        # elementwise multiply Phi_inv_diag with mu: tmp = Phi_inv_diag * mu  (shape batch x 6)
+        tmp = mu * self.Phi_inv_diag.unsqueeze(0)
+        # sigma_hat = - Bbar^{-1} * tmp
+        # invert Bbar per-sample (6x6). Paper mentions explicit form exists; here we use batched inverse with numerical care.
+        # If Bbar is well-conditioned, this is fine. Add small damping for numerical stability.
+        # Regularize Bbar before inversion:
+        reg = 1e-9
+        Bbar_reg = Bbar + reg * torch.eye(6, device=device, dtype=dtype).unsqueeze(0).repeat(batch, 1, 1)
+        Bbar_inv = torch.linalg.inv(Bbar_reg)   # (batch,6,6)
+        sigma_hat = - torch.bmm(Bbar_inv, tmp.unsqueeze(-1)).squeeze(-1)  # (batch,6)
+
+        # Separate matched & unmatched estimates
+        sigma_m_hat = sigma_hat[:, :3]   # matched (force-like)  (batch,3)
+        sigma_um_hat = sigma_hat[:, 3:]  # unmatched (batch,3)
+
+        # Save sigma_hat internal (useful diagnostics)
+        self.sigma_hat = sigma_hat
+
+        # LPF: filter matched sigma_m_hat before feeding to control.
+        # discrete exponential filter: filtered = alpha * prev + (1-alpha) * new
+        self.sigma_m_hat_filtered = self.lpf_alpha * self.sigma_m_hat_filtered + (1.0 - self.lpf_alpha) * sigma_m_hat
+
+        # L1 control law (only cancel matched part within LPF bandwidth)
+        # u_ad = - C(s) sigma_m_hat --> in time domain, we use filtered value as negative feedforward
+        # Map sigma_m_hat_filtered (world) into body frame contribution to thrust:
+        # sigma_m_hat_filtered is in the same coordinates as z (partial state): translational matched component is in world frame
+        # We need to produce body-frame augmentation u_ad = [f_L1, M_L1]
+        # The matched channel corresponding to f (collective thrust) acts along body z: B maps scalar f to (-1/m) R e3 term.
+        # To cancel a world-frame translational disturbance w_f (3-vector), we want a collective thrust change f_L1 such that:
+        # (-1/m) * R e3 * f_L1 ≈ - w_f_filtered  => f_L1 ≈ m * ( - R^T w_f_filtered )_z   (project onto body z)
+        w_f = self.sigma_m_hat_filtered  # (batch,3) world-frame matched disturbance estimate
+        # project onto body z:
+        # compute R^T w_f (body coordinates)
+        R_T = R.permute(0,2,1)  # body <- world
+        w_f_body = torch.bmm(R_T, w_f.unsqueeze(-1)).squeeze(-1)  # (batch,3)
+        # the thrust axis is body z, so collective thrust needed (scalar)
+        f_L1 = self.m * ( - w_f_body[:, 2:3] )  # (batch,1) negative sign cancels disturbance acting on acceleration
+        # For moments, we can directly use the rotational part of matched estimate? In paper the matched rotational uncertainty enters via J^-1 mapping;
+        # The matched rotational sigma_m_hat[3:6] corresponds to torque-like uncertainty in body frame; map it directly to moment augmentation:
+        M_L1 = - sigma_um_hat  # NOTE: paper concatenation may differ; choose sign to cancel measured uncertainty
+        # However to be safe, we map the rotational matched part by J * (-Omega_acc_est) or directly use filtered sigma for moments.
+        # For now we return u_ad = [f_L1, M_L1]
+        u_ad = torch.cat([f_L1, M_L1], dim=1)  # (batch,4)
+
+        # Update predictor state z_hat forward by Ts using simple Euler (or better integrator if you have)
+        # z_hat_dot = f(z) + B(R) (ub + u_ad + sigma_m_hat) + B_perp sigma_um_hat + As z_tilde
+        # Build rhs; note f(z) (gravity etc.) for partial state z = [v; Omega] is:
+        # f(z) = [ g*e3 ; - J^{-1} (Omega x J Omega) ]  (use paper Eqn. definitions)
+        # Here we implement a simple predictor; accuracy of predictor matters for fast adaptation.
+        # compute f(z) drift:
+        g = torch.tensor([0.0, 0.0, 9.81], device=device, dtype=dtype)
+        # translational drift: ge3  (world)
+        drift_trans = g.unsqueeze(0).repeat(batch,1)
+        # rotational drift: -J^{-1} (Omega x J Omega)  ; Omega is in body frame (z[3:6])
+        Omega = z[:, 3:6]
+        # compute Omega x J Omega
+        JOm = torch.bmm(self.J.unsqueeze(0).repeat(batch,1,1), Omega.unsqueeze(-1)).squeeze(-1)
+        Om_cross = torch.cross(Omega, JOm, dim=1)
+        drift_rot = - torch.bmm(torch.inverse(self.J).unsqueeze(0).repeat(batch,1,1), Om_cross.unsqueeze(-1)).squeeze(-1)
+        fz = torch.cat([drift_trans, drift_rot], dim=1)  # (batch,6)
+
+        # contribution from inputs: B(R) [ub + u_ad] + B_perp sigma_um  (we built Bbar from which we can multiply)
+        ub_total = ub + u_ad  # (batch,4)
+        # Construct combined vector [ub_total; sigma_um_hat] (4 + 2 columns assumption in compute_B_and_Bperp)
+        # But our Bbar expects ordering [f; M; ... 2 cols for B_perp]. For multiplication, we need a 6-vector per batch. We'll build x_vec accordingly:
+        # Placeholders for the two B_perp channels (we estimated sigma_um_hat has len 3; our Bbar constructed two columns only)
+        # For simplicity, map sigma_um_hat (3) into the two B_perp scalar channels by projecting onto Re1, Re2; here we approximate by using zeros for unmatched control channels.
+        # (Paper uses B_perp with 2 columns chosen such that Bbar invertible; consistent offline construction needed.)
+        zeros2 = torch.zeros(batch,2, device=device, dtype=dtype)
+        x_vec = torch.cat([ub_total, zeros2], dim=1)  # (batch,6)  -- consistent with Bbar (6 cols)
+        # Now compute contribution Bbar * x_vec
+        Bx = torch.bmm(Bbar, x_vec.unsqueeze(-1)).squeeze(-1)  # (batch,6)
+        As_mat = - torch.diag(self.a_vec).unsqueeze(0).repeat(batch,1,1)  # (batch,6,6) since As = -diag(a_vec)
+        As_ztilde = torch.bmm(As_mat, z_tilde.unsqueeze(-1)).squeeze(-1)  # (batch,6)
+        zhat_dot = fz + Bx + As_ztilde
+        # simple Euler integrate predictor over Ts:
+        self.z_hat = self.z_hat + zhat_dot * self.Ts
+
+        # Return augmentation in body frame u_ad
+        return u_ad
+
