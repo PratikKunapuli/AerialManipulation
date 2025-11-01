@@ -367,8 +367,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             # Optuna-tuned gains for EE-Reward
             # use_feed_forward = "Traj" in args_cli.task and "Integral" not in args_cli.task
             control_params_dict = gc_params_dict[task_name]["controller_params"]
-            agent = DecoupledController(envs.num_envs, 0, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset, com_pos_w=None, device=device,
+            if "2DOF" in args_cli.task:
+                agent = DecoupledController(envs.num_envs, 2, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset,
+                arm_inertia=envs.arm_inertia, arm_length=envs.arm_length, com_pos_w=None, device=device,
                                         **control_params_dict)
+            else:
+                agent = DecoupledController(envs.num_envs, 0, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset, com_pos_w=None, device=device,
+                                            **control_params_dict)
         else:
             # Crazyflie DC
             agent = DecoupledController(envs.num_envs, 0, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset, com_pos_w=None, device=device,
@@ -458,7 +463,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                     # print("Obs: ", obs_dict["gc"][args_cli.follow_robot])
                 else:
                     actions = agent(obs_tensor)
-                    # print(f'Mean arm actions:  {actions[:, -2:]}')
                 times.append(time.time() - start)
 
                 if args_cli.baseline:
@@ -484,9 +488,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 x = np.arange(T) * 0.02
                 plot_path = os.path.join(policy_path, "plots", "eval", f"robot{args_cli.follow_robot}")
                 plots = ["Policy shoulder", "Policy wrist", "Policy thrust", "Policy MX",
-                        "Policy MY", "Policy MZ", "Shoulder joint position", "Wrist joint position", "Wrist error",
-                        "Shoulder error", "Yaw error"]
-                cols = [41, 42, 37, 38, 39, 40, 26, 27, 43, 51, 50]
+                        "Policy MY", "Policy MZ", "Wrist error",
+                        "Shoulder error", "Yaw error", "Shoulder joint position", "Shoulder joint velocity"]
+                cols = [41, 42, 37, 38, 39, 40, 43, 51, 50, 26, 28]
                 os.makedirs(plot_path, exist_ok=True)
                 for i, plot in enumerate(plots):
                     fig, ax = plt.subplots()
@@ -499,7 +503,39 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 plt.title('Rewards')
                 plot_name = f'eval_rewards_robot_{args_cli.follow_robot}.png'
                 plt.savefig(os.path.join(plot_path, plot_name))
-                    
+            else:
+                T = rewards.shape[1] - 1
+                x = np.arange(T) * 0.02
+                plot_path = os.path.join(policy_path, "plots", "eval", "all")
+                os.makedirs(plot_path, exist_ok=True)
+                plots = ["Body position error", "Yaw error", "Wrist error"]
+                cols = [slice(47, 47+3), 50, 43]
+                for i, plot in enumerate(plots):
+                    fig, axs = plt.subplots(3)
+                    data = full_states[:, :-1, cols[i]]
+                    if plot == "Body position error":
+                        data = data.norm(dim=-1)
+                    data = torch.abs(data)
+                    axs[0].plot(x, data.min(dim=0).values.cpu())
+                    axs[1].plot(x, data.mean(dim=0).cpu())
+                    axs[2].plot(x, data.max(dim=0).values.cpu())
+
+                    axs[0].set_title(f"{plot} - Min")
+                    axs[1].set_title(f"{plot} - Mean")
+                    axs[2].set_title(f"{plot} - Max")
+                    plot_name = f'eval_{plot}_all.png'
+                    plt.savefig(os.path.join(plot_path, plot_name))
+                fig, ax = plt.subplots(3)
+                data = rewards[:, :-1]
+                ax[0].plot(x, data.min(dim=0).values.cpu())
+                ax[1].plot(x, data.mean(dim=0).cpu())
+                ax[2].plot(x, data.max(dim=0).values.cpu())
+
+                ax[0].set_title("Rewards - Min")
+                ax[1].set_title("Rewards - Mean")
+                ax[2].set_title("Rewards - Max")
+                plot_name = f'eval_rewards_all.png'
+                plt.savefig(os.path.join(plot_path, plot_name))
 
             print("Final Info: \n\n", info, "\n")
 

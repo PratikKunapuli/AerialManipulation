@@ -73,7 +73,8 @@ def get_point_state_from_ee_transform_w(ee_pos_w, ee_ori_quat_w, ee_vel_w, ee_om
     return point_pos_w, point_vel_w
 
 class DecoupledController():
-    def __init__(self, num_envs, num_dofs, vehicle_mass, arm_mass, inertia_tensor, pos_offset, ori_offset, print_debug=False, com_pos_w=None, device='cpu',
+    def __init__(self, num_envs, num_dofs, vehicle_mass, arm_mass, inertia_tensor, pos_offset, ori_offset, arm_inertia=None, arm_length=None,
+                  print_debug=False, com_pos_w=None, device='cpu',
                   kp_pos_gain_xy=10.0, kp_pos_gain_z=20.0, kd_pos_gain_xy=7.0, kd_pos_gain_z=9.0, 
                   kp_att_gain_xy=400.0, kp_att_gain_z=2.0, kd_att_gain_xy=70.0, kd_att_gain_z=2.0,
                   kp_att_gain_x=None, kp_att_gain_y=None, kd_att_gain_x=None, kd_att_gain_y=None,
@@ -122,9 +123,10 @@ class DecoupledController():
         self.device = torch.device(device)
         self.inertia_tensor = self.inertia_tensor.to(self.device)
 
-        if num_dofs > 0:
-            l_arm = 0.2
-            self.arm_inertia = arm_mass/3 * torch.diag(torch.tensor([l_arm**2, 0.0, l_arm**2])).to(self.device)
+        self.arm_length = arm_length
+        self.arm_inertia = arm_inertia.to(self.device)
+        # use parallel axis theorem to offset the inertia of the arm by half the arm length since pivot is at the shoulder joint
+        self.arm_inertia = self.arm_inertia + self.arm_mass * (self.arm_length/2)**2 * torch.diag(torch.tensor([1.0, 0.0, 1.0], device=self.device))
         
         self.initial_yaw_offset = torch.tensor([[0.7071, 0, 0, -0.7071]], device=self.device)
 
@@ -167,12 +169,12 @@ class DecoupledController():
         self.d_hat = torch.zeros(num_envs, 6, device=self.device) # Estimated disturbances
         self.u_ad = torch.zeros(num_envs, 4, device=self.device) # Estimated augmentations
         # self.A = -20.0 * torch.eye(6, device=self.device).tile(num_envs,1,1)
-        self.A =  torch.diag(torch.tensor([-25.0] * 3 + [-10.0, -1.0, -25.0], device=self.device)).tile(num_envs,1,1)
+        self.A =  torch.diag(torch.tensor([-5.0] * 3 + [-10.0, -10.0, -10.0], device=self.device)).tile(num_envs,1,1)
         self.expA = torch.linalg.matrix_exp(self.A * self.policy_dt)
         self.A_inv = torch.linalg.inv(self.A)
         self.phi = torch.bmm(self.A_inv, self.expA - torch.eye(6, device=self.device).tile(num_envs,1,1))
         self.phi_inv = torch.linalg.inv(self.phi)
-        self.lpf_alphas = torch.tensor([0.8] + [0.8, 0.8, 0.8], device=self.device)
+        self.lpf_alphas = torch.tensor([0.9] + [0.9, 0.9, 0.9], device=self.device)
         # breakpoint(),
 
         # self.kp_pos = torch.tensor([7.5, 15.0, 20.0], device=self.device)
@@ -527,14 +529,8 @@ class DecoupledController():
         # M = I @ (-kp_att * att_err - kd_att * omega_err) + omega x I @ omega
         inertia = self.inertia_tensor.unsqueeze(0).tile(batch_size, 1, 1).to(self.device)
         if self.num_dofs > 0:
-            ee_inertia = self.arm_inertia.unsqueeze(0).tile(batch_size, 1, 1).to(self.device)
             shoulder_angle = obs[:, 19]
-            total_angles = torch.zeros((batch_size, 3), device=self.device)
-            total_angles[:, 0] = shoulder_angle
-            R_mat = isaac_math_utils.matrix_from_euler(total_angles, "XYZ")
-            ee_inertia = torch.bmm(R_mat, ee_inertia)
-            ee_inertia = torch.bmm(ee_inertia, R_mat.transpose(-2, -1))
-            inertia = inertia + ee_inertia
+            inertia = inertia + self.get_arm_inertia(shoulder_angle)[0]
         att_pd = -self.kp_att * att_err - self.kd_att * omega_err  - self.ki_att * att_err_integral
         I_omega = torch.bmm(inertia.view(batch_size, 3, 3), quad_omega.unsqueeze(2)).squeeze(2).to(self.device)
 
@@ -576,8 +572,91 @@ class DecoupledController():
 
         # print("Thrust: ", collective_thrust) # (n, 1)
         # print("M_des (COM frame): ", M_des)
+    
+    def SE3_control_arm(self, obs):
+        batch_size = obs.shape[0]
+        num_obs = obs.shape[1]
+        com_pos = obs[:, :3]
+        quad_ori_quat = obs[:, 3:7]
+        com_vel = obs[:, 7:10]
+        quad_omega = obs[:, 10:13]
+        com_pos_goal = obs[:, 13:16]
+        quad_desired_yaw = obs[:, 16]
+        shoulder_joint_pos = obs[:, 17]
+        wrist_joint_pos = obs[:, 18]
+        shoulder_joint_vel = obs[:, 19]
+        wrist_joint_vel = obs[:, 20]
+        shoulder_angle_required = obs[:, 21]
+        wrist_angle_required = obs[:, 22]
+        shoulder_error = obs[:, 23]
+        wrist_error = obs[:, 24]
 
+        shoulder_joint_pos = shoulder_joint_pos % np.pi
+        wrist_joint_pos = wrist_joint_pos % np.pi
+
+        # Calculate all desired accelerations
+        accel_des = -self.kp_pos * (com_pos - com_pos_goal) - self.kd_pos * com_vel + self.gravity.tile(batch_size, 1)
+        # breakpoint()
+        R_des = torch.bmm(flat_utils.H2(accel_des), flat_utils.H1(quad_desired_yaw))
+        R_actual = isaac_math_utils.matrix_from_quat(quad_ori_quat)
+        S_err = 0.5 * (torch.bmm(R_des.transpose(-2, -1), R_actual) - torch.bmm(R_actual.transpose(-2, -1), R_des)) # (batch_size, 3, 3)
+        att_err = vee_map(S_err) # (batch_size, 3)
+        att_pd = -self.kp_att * att_err - self.kd_att * quad_omega # for now w_d = 0
+        shoulder_pd_accel = -self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel
+        wrist_pd_accel = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel
+
+        # Compute inertia and coriolis terms
+        arm_inertia, R_mat = self.get_arm_inertia(shoulder_joint_pos)
+        inertia = torch.zeros(batch_size, 8, 8, device=self.device)
+        inertia[:, :3, :3] = self.mass * torch.eye(3, device=self.device)
+        inertia[:, 3:6, 3:6] = self.inertia_tensor.unsqueeze(0).tile(batch_size, 1, 1) + arm_inertia
+        # TODO: manually calculating inertia using rod formula, in future take env.arm_inertia
+        inertia[:, 6, 6] = self.arm_inertia[0, 0] # inertia of shoulder actuation axis. Need to use parallel axis theorem to offset by half the arm length
+        inertia[:, 7, 7] = self.arm_inertia[1, 1] # inertia of wrist actuation axis
+
+        coriolis = torch.zeros(batch_size, 8, 8, device=self.device)
+        # for now, the nonzero term comes from the changing moment of inertia of the entire body as the shoulder angle changes
+        ee_omega = torch.cat([shoulder_joint_vel.unsqueeze(1), torch.zeros(batch_size, 2, device=self.device)], dim=1)
+        omega_hat = isaac_math_utils.skew_symmetric_matrix(ee_omega)
+        R_mat_dot = torch.bmm(R_mat, omega_hat)
+        M_dot = torch.bmm((torch.bmm(R_mat_dot, self.arm_inertia.unsqueeze(0).tile(batch_size, 1, 1))), R_mat.transpose(-2, -1))
+        M_dot = M_dot + torch.bmm(R_mat, torch.bmm(self.arm_inertia.unsqueeze(0).tile(batch_size, 1, 1), R_mat_dot.transpose(-2, -1)))
+        coriolis[:, 3:6, 3:6] = M_dot / 2.0
+        # coriolis[:, -2, 0] = 1.0
+
+        # Compute control inputs
+        accel_des = torch.cat([accel_des, att_pd, shoulder_pd_accel.unsqueeze(1), wrist_pd_accel.unsqueeze(1)], dim=1)
+        velocity_vector = torch.cat([com_vel, quad_omega, shoulder_joint_vel.unsqueeze(1), wrist_joint_vel.unsqueeze(1)], dim=1)
+        gravity_vector = torch.cat([self.gravity.tile(batch_size, 1), torch.zeros(batch_size, 5, device=self.device)], dim=1)
+        # breakpoint()
+        B = torch.zeros(batch_size, 8, 6, device=self.device)
+        B[:, -5:, -5:] = torch.eye(5, device=self.device)
+        b3 = isaac_math_utils.quat_rotate(quad_ori_quat, torch.tensor([[0.0, 0.0, 1.0]], device=quad_ori_quat.device).tile((quad_ori_quat.shape[0], 1)))
+        B[:, :3, 0] = b3
+        B_pinv = torch.linalg.pinv(B)
+        u = torch.bmm(B_pinv,
+            torch.bmm(inertia, accel_des.unsqueeze(-1)) + torch.bmm(coriolis, velocity_vector.unsqueeze(-1)) + self.mass * gravity_vector.unsqueeze(-1)
+        ).squeeze()
+        return u
+  
         
+    def get_arm_inertia(self, shoulder_angle):
+        """
+        Get the inertia tensor of the arm rotated by the shoulder angle - this gives the inertia tensor of the arm in the quad body frame.
+        Args:
+            shoulder_angle (torch.Tensor): The shoulder angle, of shape (N,).
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]: The inertia tensor of the arm in the quad body frame, of shape (N, 3, 3), and the rotation matrix that transforms the arm inertia to the quad body frame.
+        """
+        batch_size = len(shoulder_angle)
+        total_angles = torch.zeros((batch_size, 3), device=self.device)
+        total_angles[:, 0] = shoulder_angle
+        # Need to also subtract off the roll of the quadrotor
+        R_mat = isaac_math_utils.matrix_from_euler(total_angles, "XYZ")
+        # Use parallel axis theorem to offset the inertia of the arm by half the arm length since pivot is at the shoulder joint
+        ee_inertia = torch.bmm(R_mat, self.arm_inertia.unsqueeze(0).tile(batch_size, 1, 1).to(self.device))
+        ee_inertia = torch.bmm(ee_inertia, R_mat.transpose(-2, -1))
+        return ee_inertia, R_mat
 
     def shift_CTBM_to_rigid_frame(self, collective_thrust, M_des, com_in_local_frame):
         """
@@ -699,36 +778,46 @@ class DecoupledController():
 
         if self.control_mode == "CTBM":
             if self.num_dofs == 2:
-                shoulder_angle_des = obs[:, 17]
-                wrist_angle_des = obs[:, 18]
-                shoulder_joint_pos = obs[:, 19]
-                wrist_joint_pos = obs[:, 20]
-                shoulder_joint_vel_error = obs[:, 21]
-                wrist_joint_vel_error = obs[:, 22]
-                # breakpoint()
-                u = torch.cat([collective_thrust.view(batch_size, 1), M_des], dim=1)
+                u = self.SE3_control_arm(obs)
+                # shoulder_angle_des = obs[:, 17]
+                # wrist_angle_des = obs[:, 18]
+                # shoulder_joint_pos = obs[:, 19]
+                # wrist_joint_pos = obs[:, 20]
+                # shoulder_joint_vel_error = obs[:, 21]
+                # wrist_joint_vel_error = obs[:, 22]
+                # # breakpoint()
+                # u = torch.cat([collective_thrust.view(batch_size, 1), M_des], dim=1)
                 # u_adapt = self.L1_Adaptive(obs, u)
                 # u = u + u_adapt
                 # breakpoint()
-                shoulder_error = shoulder_joint_pos - shoulder_angle_des
-                wrist_error = wrist_joint_pos - wrist_angle_des
-                u[:, 0] = self.rescale_command(u[:, 0], 0.0, self.thrust_to_weight * 9.81*self.mass)
-                u[:, 1:3] = self.rescale_command(u[:, 1:3], -self.moment_scale_xy, self.moment_scale_xy)
-                u[:, 3] = self.rescale_command(u[:, 3], -self.moment_scale_z, self.moment_scale_z)
+                # shoulder_error = shoulder_joint_pos - shoulder_angle_des
+                # wrist_error = wrist_joint_pos - wrist_angle_des   
                 # # breakpoint()
                 # # TODO: for now, padding with zeros
                 # u1 = self.rescale_command(collective_thrust, 0.0, self.thrust_to_weight * 9.81*self.mass).view(batch_size, 1)
                 # u2 = self.rescale_command(M_des[:, 0], -self.moment_scale_xy, self.moment_scale_xy).view(batch_size, 1)
                 # u3 = self.rescale_command(M_des[:, 1], -self.moment_scale_xy, self.moment_scale_xy).view(batch_size, 1)
                 # # u4 = self.rescale_command(M_des[:, 2], -self.moment_scale_z, self.moment_scale_z).view(batch_size, 1)
-                u_shoulder = -self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel_error
-                u_wrist = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel_error
-                u_shoulder = self.rescale_command(u_shoulder, -self.shoulder_torque_scalar, self.shoulder_torque_scalar).unsqueeze(-1)
-                u_wrist = self.rescale_command(u_wrist, -self.wrist_torque_scalar, self.wrist_torque_scalar).unsqueeze(-1)
-                u_arm = torch.cat([u_shoulder, u_wrist], dim=1)
+                # u_shoulder = -self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel_error
+                # u_wrist = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel_error
+
+                # u_wrist_body_y = u_wrist * torch.cos(shoulder_joint_pos)
+                # u_wrist_body_z = u_wrist * torch.sin(shoulder_joint_pos)
+                # u[:, 1] += u_shoulder
+                # u[:, 2] -= u_wrist_body_y
+                # u[:, 3] -= u_wrist_body_z
+                
+                u[:, 0] = self.rescale_command(u[:, 0], 0.0, self.thrust_to_weight * 9.81*self.mass)
+                u[:, 1:3] = self.rescale_command(u[:, 1:3], -self.moment_scale_xy, self.moment_scale_xy)
+                u[:, 3] = self.rescale_command(u[:, 3], -self.moment_scale_z, self.moment_scale_z)
+                # u_shoulder = self.rescale_command(u_shoulder, -self.shoulder_torque_scalar, self.shoulder_torque_scalar).unsqueeze(-1)
+                # u_wrist = self.rescale_command(u_wrist, -self.wrist_torque_scalar, self.wrist_torque_scalar).unsqueeze(-1)
+                u[:, 4] = self.rescale_command(u[:, 4], -self.shoulder_torque_scalar, self.shoulder_torque_scalar)
+                u[:, 5] = self.rescale_command(u[:, 5], -self.wrist_torque_scalar, self.wrist_torque_scalar)
+                # u_arm = torch.cat([u_shoulder, u_wrist], dim=1)
                 # u_arm = torch.zeros(batch_size, 2, device=self.device)
                 # u =  torch.cat([u1, u2, u3, u4, u_arm], dim=1)
-                u = torch.cat([u, u_arm], dim=1)
+                # u = torch.cat([u, u_arm], dim=1)
             
                 return u
             
@@ -772,11 +861,11 @@ class DecoupledController():
             com_omega = obs[:, 10:13]
             desired_pos = obs[:, 13:16]
             desired_yaw = obs[:, 16:17]
-            reset_ids = obs[:, 17:]
+            # reset_ids = obs[:, 17:]
         
-        reset_ids = reset_ids.squeeze(-1)
-        self.z_est[reset_ids == 1.0] = 0.0
-        self.d_hat[reset_ids == 1.0] = 0.0
+        # reset_ids = reset_ids.squeeze(-1)
+        # self.z_est[reset_ids == 1.0] = 0.0
+        # self.d_hat[reset_ids == 1.0] = 0.0
 
         # breakpoint()
 
@@ -786,22 +875,24 @@ class DecoupledController():
         # Preliminary calculations
         f = torch.zeros(batch_size, 6, device=self.device)
         f[:, :3] = -self.gravity
-        J_inv = torch.linalg.inv(self.inertia_tensor)
+       
         # f[:, 3:6] = torch.linalg.cross(
         #     torch.bmm(-J_inv.tile(batch_size, 1, 1), com_omega_body.unsqueeze(-1)).squeeze(-1),
         #     torch.bmm(self.inertia_tensor.tile(batch_size, 1, 1), com_omega_body.unsqueeze(-1)).squeeze(-1)
         # )
         # breakpoint()
-        f[:, 3:6] = torch.bmm(-J_inv.tile(batch_size, 1, 1), torch.linalg.cross(
+        inertia = self.inertia_tensor.tile(batch_size, 1, 1) + self.get_arm_inertia(obs[:, 19])
+        J_inv = torch.linalg.inv(inertia)
+        f[:, 3:6] = torch.bmm(-J_inv, torch.linalg.cross(
             com_omega_body,
-            torch.bmm(self.inertia_tensor.tile(batch_size, 1, 1), com_omega_body.unsqueeze(-1)).squeeze(-1)
+            torch.bmm(inertia, com_omega_body.unsqueeze(-1)).squeeze(-1)
         ).unsqueeze(-1)).squeeze(-1)
 
         B = torch.zeros(batch_size, 6, 4, device=self.device)
         z_body = torch.tensor([0.0, 0.0, 1.0], device=self.device).tile(batch_size, 1)
         z_world = isaac_math_utils.quat_rotate(com_ori_quat, z_body)
         B[:, :3, 0] = z_world / self.mass
-        B[:, 3:6, 1:4] = J_inv.tile(batch_size, 1, 1)
+        B[:, 3:6, 1:4] = J_inv
 
         B_perp = torch.zeros(batch_size, 6, 2, device=self.device)
         x_body = torch.tensor([1.0, 0.0, 0.0], device=self.device).tile(batch_size, 1)

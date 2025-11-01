@@ -25,6 +25,8 @@ from omni.isaac.lab.utils.math import (
     yaw_quat,
     quat_conjugate,
     quat_from_euler_xyz,
+    euler_xyz_from_quat,
+    matrix_from_euler,
 )
 from omni.isaac.lab_assets import CRAZYFLIE_CFG
 from omni.isaac.lab.sim.spawners.shapes import SphereCfg, spawn_sphere
@@ -115,25 +117,25 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     trajectory_horizon = 10
     random_shift_trajectory = False
     # TODO: this is not changed at this level using hydra args, happens once __init__ called for env
-    eval_trajectory = "yaw" or trajectory_type
+    eval_trajectory = "" or trajectory_type
 
     # Easy to visualize known trajectories for eval:
-    if eval_trajectory == "shoulder":
+    if eval_trajectory == "shoulder" or eval_trajectory == "s":
     # Trajectory where only shoulder angle should change:
         lissajous_amplitudes = [0.0, 0.2, 0.2, np.pi / 2, 0.0, 0.0]
         lissajous_amplitudes_rand_ranges = [0.0] * 6
-        lissajous_frequencies = [0.0, 0.5, 0.5, 0.5, 0.0, 0.0]
+        lissajous_frequencies = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0]
         lissajous_frequencies_rand_ranges = [0.0] * 6
         lissajous_phases = [0.0]*6
         lissajous_phases_rand_ranges = [0.0]*6
         lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
         lissajous_offsets_rand_ranges = [0.0] * 6
 
-    elif eval_trajectory == "wrist":
+    elif eval_trajectory == "wrist" or eval_trajectory == "w":
     # Trajectory where only wrist angle should change:
         lissajous_amplitudes = [0.0, 0.0, 0.0, 0.0, np.pi / 2, 0.0]
         lissajous_amplitudes_rand_ranges = [0.0] * 6
-        lissajous_frequencies = [0.0, 0.0, 0.0, 0.0, 0.5, 0.0]
+        lissajous_frequencies = [0.0, 0.0, 0.0, 0.0, 1.0, 0.0]
         lissajous_frequencies_rand_ranges = [0.0] * 6
         lissajous_phases = [0.0]*6
         lissajous_phases_rand_ranges = [0.0]*6
@@ -141,10 +143,10 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
         lissajous_offsets_rand_ranges = [0.0] * 6
 
     # Trajectory where only yaw angle should change:
-    elif eval_trajectory == "yaw":
+    elif eval_trajectory == "yaw" or eval_trajectory == "y":
         lissajous_amplitudes = [0.2, 0.2, 0.0, 0.0, 0.0, np.pi / 2]
         lissajous_amplitudes_rand_ranges = [0.0] * 6
-        lissajous_frequencies = [0.25, 0.25, 0.0, 0.0, 0.0, 0.25]
+        lissajous_frequencies = [1.0, 1.0, 0.0, 0.0, 0.0, 1.0]
         lissajous_frequencies_rand_ranges = [0.0] * 6
         lissajous_phases = [0.0]*6
         lissajous_phases_rand_ranges = [0.0]*6
@@ -153,14 +155,14 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
 
      # (x, y, z, roll, pitch, yaw)
     else:
-        lissajous_amplitudes = [0.5, 0.5, 0.25, np.pi / 3, np.pi / 3, np.pi / 4]
-        lissajous_amplitudes_rand_ranges = [0.25, 0.25, 0.25, np.pi / 6, np.pi / 6, np.pi / 6]
-        lissajous_frequencies = [1.0, 1.0, 0.5, np.pi / 20, np.pi / 10, np.pi / 10]
-        lissajous_frequencies_rand_ranges = [0.5, 0.5, 0.5, np.pi / 20, np.pi / 10, np.pi / 10]
+        lissajous_amplitudes = [0.0] * 6#[1.5, 1.5, 1.5, np.pi, np.pi, np.pi]
+        lissajous_amplitudes_rand_ranges = [1.5, 1.5, 1.0, np.pi, np.pi, np.pi]
+        lissajous_frequencies = [0.0] * 6#[1.5, 1.5, 1.5, 0.5, 0.5, 2.0]
+        lissajous_frequencies_rand_ranges = [1.5, 1.5, 1.5, 1.0, 1.0, 0.5]
         lissajous_phases = [0.0]*6
-        lissajous_phases_rand_ranges = [1.0]*6
-        lissajous_offsets = [0.0, 0.0, 0.5, 0.0, 0.0, 0.0]
-        lissajous_offsets_rand_ranges = [0.5, 0.5, 0.25, np.pi / 4, np.pi / 4, np.pi / 4]
+        lissajous_phases_rand_ranges = [np.pi]*6
+        lissajous_offsets = [0.0, 0.0, 2.0, 0.0, 0.0, 0.0] # Higher z offset just to avoid fake crashes
+        lissajous_offsets_rand_ranges = [2.0, 2.0, 0.5, np.pi, np.pi, np.pi]
 
 
     polynomial_x_coefficients= [0.5, 0.5]
@@ -182,41 +184,43 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     thrust_to_weight = 3.0
 
     # reward scales - copied from hover env
-    body_pos_radius = 0.8
+    body_pos_radius_start = 0.8
     body_pos_radius_curriculum = int(9e6) #int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
     body_pos_distance_reward_scale = 10.0 #15.0
 
-    ee_pos_radius = 0.8
+    ee_pos_radius_start = 0.8
     ee_pos_radius_curriculum = int(2e7) #int(2e7) # 10e6
-    ee_pos_error_reward_scale = 0.0 # -1.0
+    ee_pos_error_reward_scale = -0.5 # -1.0
     ee_pos_distance_reward_scale = 15.0 #15.0
 
-    ori_radius = 0.8
+    ori_radius_start = 0.8
     ori_radius_curriculum = int(3e7) #int(2e7)
     ori_distance_reward_scale = 5.0
-    ori_error_reward_scale = 0.0 # -0.5
+    ori_error_reward_scale = -0.5 # -0.5
 
     lin_vel_reward_scale = -0.5 # -0.05
     ang_vel_reward_scale = -0.1 # -0.01
+    body_ang_vel_reward_scale = -0.1
     joint_vel_reward_scale = 0.0 # -0.01
-    action_prop_norm_reward_scale = -0.001 # -0.01
+    action_thrust_norm_reward_scale = -0.001 # -0.01
+    action_moment_norm_reward_scale = -0.001 # -0.01
     action_joint_norm_reward_scale = 0.0
     previous_action_reward_scale = -0.1
     
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
-    yaw_radius = 0.8
+    yaw_radius_start = 0.8
     yaw_radius_curriculum = int(0) 
     yaw_smooth_transition_scale = 0.0
 
     shoulder_error_reward_scale = 0.0
-    shoulder_radius = 0.8
+    shoulder_radius_start = 0.8
     shoulder_radius_curriculum = int(0)
     shoulder_distance_reward_scale = 0.0
     
-    wrist_error_reward_scale = 0.0 #-2.0 
-    wrist_radius = 0.8
+    wrist_error_reward_scale = -0.1 #-2.0 
+    wrist_radius_start = 0.8
     wrist_radius_curriculum = int(9e6)
     wrist_distance_reward_scale = 5.0#1.0
 
@@ -428,6 +432,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # Required body attribute for reaching next goal
         self._desired_body_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self._desired_body_pos_traj = torch.zeros(self.num_envs, 1+self.cfg.trajectory_horizon, 3, device=self.device)
 
         # self.amplitudes = torch.zeros(self.num_envs, 4, device=self.device)
         # self.frequencies = torch.zeros(self.num_envs, 4, device=self.device)
@@ -652,6 +657,13 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
 
+        self.body_pos_radius = self.cfg.body_pos_radius_start
+        self.ee_pos_radius = self.cfg.ee_pos_radius_start
+        self.ori_radius = self.cfg.ori_radius_start
+        self.yaw_radius = self.cfg.yaw_radius_start
+        self.shoulder_radius = self.cfg.shoulder_radius_start
+        self.wrist_radius = self.cfg.wrist_radius_start
+
         # import code; code.interact(local=locals())
 
 
@@ -700,18 +712,18 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # print("[Isaac Env: Curriculum] Total Timesteps: ", total_timesteps, " Pos Radius: ", self.cfg.pos_radius)
         if self.cfg.ee_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.cfg.ee_pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.ee_pos_radius_curriculum))
+            self.ee_pos_radius = max(self.cfg.ee_pos_radius_start * (0.5 ** (total_timesteps // self.cfg.ee_pos_radius_curriculum)), 0.01)
         if self.cfg.body_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.cfg.body_pos_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.body_pos_radius_curriculum))
+            self.body_pos_radius = max(self.cfg.body_pos_radius_start * (0.5 ** (total_timesteps // self.cfg.body_pos_radius_curriculum)), 0.01)
         if self.cfg.ori_radius_curriculum > 0:
-            self.cfg.ori_radius = 0.8 * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum))
+            self.ori_radius = max(self.cfg.ori_radius_start * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum)), 0.01)
         if self.cfg.yaw_radius_curriculum > 0:
-            self.cfg.yaw_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum))
+            self.yaw_radius = max(self.cfg.yaw_radius_start * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum)), 0.01)
         if self.cfg.shoulder_radius_curriculum > 0:
-            self.cfg.shoulder_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum))
+            self.shoulder_radius = max(self.cfg.shoulder_radius_start * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum)), 0.01)
         if self.cfg.wrist_radius_curriculum > 0:
-            self.cfg.wrist_radius = 0.2 * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum))
+            self.wrist_radius = max(self.cfg.wrist_radius_start * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum)), 0.01)
 
 
 
@@ -811,6 +823,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         self._desired_pos_w[env_ids] = self._desired_pos_traj_w[env_ids, 0]
         self._desired_ori_w[env_ids] = self._desired_ori_traj_w[env_ids, 0]
+        
 
         # For IK, we need to calculate the required body position for the next goal
         # print("Shapes:")
@@ -822,6 +835,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # print("Desired Body Pos: ", self._desired_body_pos.shape)
         # print("Desired Body Pos: ", self._desired_body_pos.shape)
         self._desired_body_pos = calculate_required_pos(self._desired_ori_w, self._desired_pos_w, self._desired_body_pos, self.arm_length, env_ids.squeeze(1))
+        self._desired_body_pos_traj = calculate_required_pos(self._desired_ori_traj_w, self._desired_pos_traj_w, self._desired_body_pos_traj, self.arm_length, env_ids.squeeze(1))
         # print("0th env: ", self._desired_pos_w[0], self._desired_ori_w[0])
         # print("[Isaac Env: Update Goal State] Desired Pos: ", self._desired_pos_w[env_ids[:5,0]])
         
@@ -857,31 +871,41 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # For quad body, we only care about the position error, so can use any orientation for calculating the frame transform
         body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
                                                           self._desired_body_pos, body_ori_w)
-        # body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
-        # body_roll = torch.reshape(body_roll, (-1, 1))
-        # body_pitch = torch.reshape(body_pitch, (-1, 1))
+        body_pos_error_2, _ = self.convert_ee_goal_from_task(goal_pos_w, goal_ori_w, "vehicle")
+        # body_pos_error_2 = quat_rotate_inverse(body_ori_w, body_pos_error_2)
+        # print(body_pos_error[:5])
+        # print('-'*20)
+        # print(body_pos_error_2[:5])
 
-        yaw_error = yaw_error_from_quats(base_ori_w, goal_ori_w, dof=2)
+        body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
+        body_roll = torch.reshape(body_roll, (-1, 1))
+        body_pitch = torch.reshape(body_pitch, (-1, 1))
+
+        yaw_error = yaw_error_from_quats(base_ori_w, goal_ori_w, dof=2).unsqueeze(1)
         shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
 
         future_pos_error_b = []
         future_ori_error_b = []
+        future_body_pos_error_b = []
         for i in range(self.cfg.trajectory_horizon):
             goal_pos_traj_w, goal_ori_traj_w = self.convert_ee_goal_from_task(self._desired_pos_traj_w[:, i+1].squeeze(1), self._desired_ori_traj_w[:, i+1].squeeze(1), self.cfg.goal_body)
-
+            # goal_body_pos_traj_w, _ = self.convert_ee_goal_from_task(self._desired_pos_traj_w[:, i+1].squeeze(1), self._desired_ori_traj_w[:, i+1].squeeze(1), "vehicle")
             waypoint_pos_error_b, waypoint_ori_error_b = subtract_frame_transforms(base_pos_w, base_ori_w, goal_pos_traj_w, goal_ori_traj_w)
+            waypoint_body_pos_error_b, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
+                                                          self._desired_body_pos_traj[:, i+1].squeeze(1), body_ori_w)            
             future_pos_error_b.append(waypoint_pos_error_b) # append (n, 3) tensor
             future_ori_error_b.append(waypoint_ori_error_b) # append (n, 4) tensor
+            future_body_pos_error_b.append(waypoint_body_pos_error_b)
         if len(future_pos_error_b) > 0:
             future_pos_error_b = torch.stack(future_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
             future_ori_error_b = torch.stack(future_ori_error_b, dim=1) # stack to (n, horizon, 4) tensor
-
+            future_body_pos_error_b = torch.stack(future_body_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
             if self.cfg.use_yaw_representation_for_trajectory:
                 future_ori_error_b = math_utils.yaw_from_quat(future_ori_error_b).reshape(self.num_envs, self.cfg.trajectory_horizon, 1)
         else:
             future_pos_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
             future_ori_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 4, device=self.device)
-
+            future_body_pos_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
         
 
         # Compute the orientation error as a yaw error in the body frame
@@ -922,6 +946,11 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         else:
             ang_vel_error_w = torch.zeros_like(ang_vel_w) - ang_vel_w
         ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_error_w)
+
+        # Do the same for the body frame
+        body_lin_vel_b = quat_rotate_inverse(body_ori_w, body_lin_vel_w)
+        body_ang_vel_b = quat_rotate_inverse(body_ori_w, body_ang_vel_w)
+
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
         shoulder_joint_vel = torch.zeros(self.num_envs, 0, device=self.device)
@@ -943,28 +972,38 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # First attempt: for current time step, use the same observations as the hover env, and keep the horizon to only include the task (ee) pos/ori error.
         # If needed, will update so that the horizon includes the body (vehicle) pos/ori error.
-        body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
+        # body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
+        body_ori_error_b = torch.stack((body_roll, body_pitch, yaw_error), dim=1).squeeze(-1)
+        body_ori_error_b = matrix_from_euler(body_ori_error_b, convention="XYZ")
+        body_ori_error_b = body_ori_error_b.flatten(-2, -1)
         obs = torch.cat(
             [
-                pos_error_b,                                # (num_envs, 3)
-                body_pos_error,                             # (num_envs, 3)
-                ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
-                # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
-                grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
-                body_ori_w_flattened_matrix,                # (num_envs, 9) 
-                lin_vel_b,                                  # (num_envs, 3)
-                ang_vel_b,                                  # (num_envs, 3)
-                body_ang_vel_w,                             # (num_envs, 3) # Added to help with body jittering
-                # shoulder_joint_pos,                       # (num_envs, 1)
-                # wrist_joint_pos,                          # (num_envs, 1)
-                wrist_error,                                # (num_envs, 1)
-                shoulder_joint_vel,                         # (num_envs, 1)
-                wrist_joint_vel,                            # (num_envs, 1)
-                previous_actions,                           # (num_envs, 6)
+                pos_error_b,                                # (num_envs, 3) [0-2]
+                body_pos_error,                             # (num_envs, 3) [3-5]
+                # ori_error_b,                                # (num_envs, 3) [6-8]
+                ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
+                # yaw_error,
+                # shoulder_error,
+                # wrist_error,
+                # body_ori_w,                                 # (num_envs, 4) [6-9]
+                # body_ori_w_flattened_matrix,                # if using full ori matrix [3-11]
+                body_ori_error_b,
+                # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
+                # goal_ori_w_flattened_matrix,                # [12-20]
+                grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
+                lin_vel_b,                                  # (num_envs, 3) [24-26]
+                ang_vel_b,                                  # (num_envs, 3) [27-29]
+                # shoulder_joint_pos,                         # (num_envs, 1) [30]
+                wrist_error,                                # (num_envs, 1) [31]
+                # wrist_joint_pos,                            # (num_envs, 1) [34]
+                # wrist_error,                                # (num_envs, 1) [32]
+                shoulder_joint_vel,                         # (num_envs, 1) [32]
+                wrist_joint_vel,                            # (num_envs, 1) [33]
                 future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
-                future_ori_error_b.flatten(-2, -1)          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                future_ori_error_b.flatten(-2, -1),          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                # future_body_pos_error_b.flatten(-2, -1),     # (num_envs, horizon * 3)
             ],
-            dim=-1                                          # (num_envs, 22 + 7*horizon)
+            dim=-1                                          # (num_envs, 22 + 7*horizon + 3*horizon)
         )
 
         # Additional critic observations
@@ -972,24 +1011,26 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             critic_obs = torch.cat(
                 [
                     pos_error_b,                                # (num_envs, 3) [0-2]
+                    body_pos_error,
                     ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
-                    yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
+                    body_ori_error_b,
+                    # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
                     grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
                     lin_vel_b,                                  # (num_envs, 3)
                     ang_vel_b,                                  # (num_envs, 3)
-                    shoulder_joint_pos,                         # (num_envs, 1)
-                    wrist_joint_pos,                            # (num_envs, 1)
+                    body_lin_vel_b,
+                    body_ang_vel_b,                    
+                    # shoulder_joint_pos,                         # (num_envs, 1)
+                    # wrist_joint_pos,                            # (num_envs, 1)
+                    # yaw_error,
+                    # shoulder_error,
+                    wrist_error,
                     shoulder_joint_vel,                         # (num_envs, 1)
                     wrist_joint_vel,  
-                    body_pos_error,
-                    body_ori_w_flattened_matrix,
-                    # body_roll,
-                    # body_pitch,
-                    body_lin_vel_w,
-                    body_ang_vel_w,
                     previous_actions,
                     future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
-                    future_ori_error_b.flatten(-2, -1)          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                    future_ori_error_b.flatten(-2, -1),          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                    future_body_pos_error_b.flatten(-2, -1),     # (num_envs, horizon * 3)
                 ],
                 dim=-1
             )
@@ -1043,20 +1084,26 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             yaw_traj = self._yaw_traj[:2,:,0].permute(1,0).reshape(self.num_envs, -1)
             full_state = torch.cat(
                 [
-                    quad_pos_w,                                 # (num_envs, 3) [0-3]
-                    quad_ori_w,                                 # (num_envs, 4) [3-7]
-                    quad_lin_vel_w,                             # (num_envs, 3) [7-10]
-                    quad_ang_vel_w,                             # (num_envs, 3) [10-13]
-                    ee_pos_w,                                   # (num_envs, 3) [13-16]
-                    ee_ori_w,                                   # (num_envs, 4) [16-20]
-                    ee_lin_vel_w,                               # (num_envs, 3) [20-23]
-                    ee_ang_vel_w,                               # (num_envs, 3) [23-26]
+                    quad_pos_w,                                 # (num_envs, 3) [0-2]
+                    quad_ori_w,                                 # (num_envs, 4) [3-6]
+                    quad_lin_vel_w,                             # (num_envs, 3) [7-9]
+                    quad_ang_vel_w,                             # (num_envs, 3) [10-12]
+                    ee_pos_w,                                   # (num_envs, 3) [13-15]
+                    ee_ori_w,                                   # (num_envs, 4) [16-19]
+                    ee_lin_vel_w,                               # (num_envs, 3) [20-22]
+                    ee_ang_vel_w,                               # (num_envs, 3) [23-25]
                     shoulder_joint_pos,                         # (num_envs, 1) [26] 
                     wrist_joint_pos,                            # (num_envs, 1) [27]
                     shoulder_joint_vel,                         # (num_envs, 1) [28]
                     wrist_joint_vel,                            # (num_envs, 1) [29]
-                    self._desired_pos_w,                        # (num_envs, 3) [30-33] [26-29]
-                    self._desired_ori_w,                        # (num_envs, 4) [33-37] [29-33]
+                    self._desired_pos_w,                        # (num_envs, 3) [30-32] 
+                    self._desired_ori_w,                        # (num_envs, 4) [33-36] 
+                    self._actions,                              # (num_envs, 6) [37-42]
+                    wrist_error,                                 # (num_envs, 1) [43]
+                    pos_error_b,                                # (num_envs, 3) [44-46]
+                    body_pos_error,                             # (num_envs, 3) [47-49]
+                    yaw_error,                                  # (num_envs, 1) [50]
+                    shoulder_error,                             # (num_envs, 1) [51]
                     pos_traj,
                     yaw_traj,
                 ],
@@ -1084,16 +1131,16 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             ee_pos_error = torch.linalg.norm(goal_pos_w - base_pos_w, dim=1)
             body_pos_error = torch.linalg.norm(self._desired_body_pos - body_pos_w, dim=1)
         if self.cfg.square_pos_error:
-            ee_pos_distance = torch.exp(- (ee_pos_error **2) / self.cfg.ee_pos_radius)
-            body_pos_distance = torch.exp(- (body_pos_error **2) / self.cfg.body_pos_radius)
+            ee_pos_distance = torch.exp(- (ee_pos_error **2) / self.ee_pos_radius)
+            body_pos_distance = torch.exp(- (body_pos_error **2) / self.body_pos_radius)
         else:
-            ee_pos_distance = torch.exp(- (ee_pos_error) / self.cfg.ee_pos_radius)
-            body_pos_distance = torch.exp(- (body_pos_error) / self.cfg.body_pos_radius)
+            ee_pos_distance = torch.exp(- (ee_pos_error) / self.ee_pos_radius)
+            body_pos_distance = torch.exp(- (body_pos_error) / self.body_pos_radius)
 
 
         ori_error = quat_error_magnitude(goal_ori_w, base_ori_w)
         
-        ori_distance = torch.exp(-(ori_error ** 2) / self.cfg.ori_radius)
+        ori_distance = torch.exp(-(ori_error ** 2) / self.ori_radius)
 
         goal_yaw_w = yaw_quat(goal_ori_w)
         current_yaw_w = yaw_quat(base_ori_w)
@@ -1108,7 +1155,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         yaw_error = torch.linalg.norm(yaw_error, dim=1)
 
         # yaw_distance = (1.0 - torch.tanh(yaw_error / self.cfg.yaw_radius)) * smooth_transition_func
-        yaw_distance = torch.exp(- (yaw_error **2) / self.cfg.yaw_radius)
+        yaw_distance = torch.exp(- (yaw_error **2) / self.yaw_radius)
         yaw_error = yaw_error * smooth_transition_func
 
         # combined_error = (pos_error)**2 + (yaw_error * self.arm_length)**2
@@ -1121,12 +1168,12 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             yaw_error = yaw_error_from_quats(goal_ori_w, base_ori_w, 2).unsqueeze(1)
             shoulder_joint_error = torch.abs(shoulder_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
             wrist_joint_error = torch.abs(wrist_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
-            shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.cfg.shoulder_radius)
-            wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.cfg.wrist_radius)
+            shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.shoulder_radius)
+            wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.wrist_radius)
 
         # Copied from hover - don't actually use this but needed for shapes when concatenating rewards:
         yaw_error = torch.linalg.norm(yaw_error, dim=1)
-        yaw_distance = torch.exp(- (yaw_error **2) / self.cfg.yaw_radius)
+        yaw_distance = torch.exp(- (yaw_error **2) / self.yaw_radius)
         yaw_error = yaw_error * smooth_transition_func
 
         # Velocity error components, used for stabliization tuning
@@ -1163,7 +1210,11 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # action_error = torch.sum(torch.square(self._actions), dim=1) 
         # action_error = torch.norm(self._actions, dim=1)
-        action_prop_error = torch.norm(self._actions[:, :4], dim=1)
+        # hover_thrust = (self._robot_weight / self.cfg.thrust_to_weight) * 2.0 - 1.0
+        # reference_action = torch.tensor([hover_thrust, 0.0, 0.0, 0.0], device=self.device).tile(self.num_envs, 1)
+        # Split the prop error into thrust and moment error
+        action_thrust_error = torch.norm(self._actions[:, :1], dim=1)
+        action_moment_error = torch.norm(self._actions[:, 1:4], dim=1)
         action_joint_error = torch.norm(self._actions[:, -2:], dim=1)
         action_delta_error = torch.norm(self._actions - self._previous_actions, dim=1)
 
@@ -1222,9 +1273,9 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             "shoulder_joint_distance": shoulder_joint_distance * self.cfg.shoulder_distance_reward_scale * time_scale,
             "wrist_joint_error": wrist_joint_error * self.cfg.wrist_error_reward_scale * time_scale,
             "wrist_joint_distance": wrist_joint_distance * self.cfg.wrist_distance_reward_scale * time_scale,
-            "body_ang_vel": body_ang_vel_error * self.cfg.ang_vel_reward_scale * time_scale, # use the same reward scale as the endeffector ang vel for now
+            "body_ang_vel": body_ang_vel_error * self.cfg.body_ang_vel_reward_scale * time_scale, # use the same reward scale as the endeffector ang vel for now
             # "joint_vel": combined_distance * self.cfg.joint_vel_reward_scale * time_scale,
-            "action_norm_prop": action_prop_error * self.cfg.action_prop_norm_reward_scale * time_scale,
+            "action_norm_prop": (action_thrust_error * self.cfg.action_thrust_norm_reward_scale + action_moment_error * self.cfg.action_moment_norm_reward_scale) * time_scale,
             "action_norm_joint": action_joint_error * self.cfg.action_joint_norm_reward_scale * time_scale,
             "action_delta": action_delta_error * self.cfg.previous_action_reward_scale * time_scale,
             "stay_alive": torch.ones_like(ee_pos_error) * self.cfg.stay_alive_reward * time_scale,
@@ -1244,7 +1295,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             "ang_vel": ang_vel_error,
             "body_ang_vel": body_ang_vel_error,
             "joint_vel": joint_vel_error,
-            "action_norm_prop": action_prop_error,
+            "action_norm_prop": action_thrust_error + action_moment_error,
             "action_norm_joint": action_joint_error,
             "action_delta": action_delta_error,
             "stay_alive": torch.ones_like(ee_pos_error),
@@ -1270,6 +1321,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # Check if end effector or body has collided with the ground
         if self.cfg.has_end_effector:
             died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.0, self._robot.data.body_state_w[:, self._body_id, 2].squeeze() < 0.0)
+            died = died | (self._robot.data.root_pos_w[:, 2] > 15.0) # set a high roof to avoid cases when robot flies away
         else:
             died = torch.logical_or(self._robot.data.root_pos_w[:, 2] < 0.1, self._robot.data.root_pos_w[:, 2] > 2.0)
 
@@ -1308,10 +1360,10 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         extras["Metrics/Final Yaw Error to Goal"] = final_yaw_error_to_goal
         extras["Episode Termination/died"] = torch.count_nonzero(self.reset_terminated[env_ids]).item()
         extras["Episode Termination/time_out"] = torch.count_nonzero(self.reset_time_outs[env_ids]).item()
-        extras["Metrics/EE Position Radius"] = self.cfg.ee_pos_radius
-        extras["Metrics/Quad Position Radius"] = self.cfg.body_pos_radius
-        extras["Metrics/Ori Radius"] = self.cfg.ori_radius
-        extras["Metrics/Wrist Radius"] = self.cfg.wrist_radius
+        extras["Metrics/EE Position Radius"] = self.ee_pos_radius
+        extras["Metrics/Quad Position Radius"] = self.body_pos_radius
+        extras["Metrics/Ori Radius"] = self.ori_radius
+        extras["Metrics/Wrist Radius"] = self.wrist_radius
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
 

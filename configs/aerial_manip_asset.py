@@ -101,7 +101,7 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
         "shoulder": IdealPDActuatorCfg( # Stiffness, damping, armature, friction need to be set. 
             # joint_names_expr=["joint1"],
             joint_names_expr=["joint_shoulder"],
-            effort_limit=0.6,
+            effort_limit=1.0,
             velocity_limit=float(10),
             stiffness=0.0,
             damping=0.0,
@@ -111,7 +111,7 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
         "wrist": IdealPDActuatorCfg( # Stiffness, damping, armature, friction need to be set. 
             # joint_names_expr=["joint2"],
             joint_names_expr=["joint_wrist"],
-            effort_limit=0.3,
+            effort_limit=0.5,
             velocity_limit=float(10),
             stiffness=0.0,
             damping=0.0,
