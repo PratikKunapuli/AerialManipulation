@@ -721,11 +721,11 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # print("[Isaac Env: Observations] \"Frame\" Pos: ", base_pos_w)
         # quad_pos_w, quad_ori_w, quad_lin_vel_w, quad_ang_vel_w = self.get_frame_state_from_task("vehicle")
         # Get COM info
-        com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
+        # com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
 
         # Calulate desired COM pos by subtracting the COM offset from the EE pos
-        com_pos_ee_w = com_pos_w - base_pos_w
-        com_pos_goal_w = goal_pos_w + com_pos_ee_w
+        # com_pos_ee_w = com_pos_w - base_pos_w
+        # com_pos_goal_w = goal_pos_w + com_pos_ee_w
 
         # ee_pos_w, ee_ori_w, ee_lin_vel_w, ee_ang_vel_w = self.get_frame_state_from_task("root")
         # print("[Isaac Env: Observations] Quad pos: ", quad_pos_w)
@@ -743,11 +743,12 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     # com_pos_w,
                     body_pos_w,
                     body_ori_w,
-                    com_lin_vel_w,
-                    body_ang_vel_w,
+                    body_lin_vel_w,
+                    body_ang_vel_b,
                     # com_pos_goal_w,
                     self._desired_body_pos,
-                    # goal_ori_w,
+                    # g
+                    # oal_ori_w,
                     # goal_yaw_w.unsqueeze(1),
                     yaw_from_quat(goal_ori_w).unsqueeze(1),
                     # yaw_required,
