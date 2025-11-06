@@ -161,10 +161,10 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     init_cfg = "default" # "default" or "rand"
 
-    task_body = "root" # "root" or "endeffector" or "vehicle" or "COM"
-    goal_body = "root" # "root" or "endeffector" or "vehicle" or "COM"
-    reward_task_body = "root"
-    reward_goal_body = "root"
+    task_body = "endeffector" # "root" or "endeffector" or "vehicle" or "COM"
+    goal_body = "endeffector" # "root" or "endeffector" or "vehicle" or "COM"
+    reward_task_body = "endeffector"
+    reward_goal_body = "endeffector"
     body_name = "vehicle"
     has_end_effector = True
     use_grav_vector = True
@@ -441,6 +441,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # get center of mass of whole system (vehicle + end effector)
         self.vehicle_mass = self._robot.root_physx_view.get_masses()[0, self._body_id].sum()
         self.arm_mass = self._total_mass - self.vehicle_mass
+        # breakpoint()
 
         self.com_pos_w = torch.zeros(1, 3, device=self.device)
         for i in range(self._robot.num_bodies):
@@ -468,6 +469,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         self._frame_orientations = torch.zeros(self.num_envs, 2, 4, device=self.device)
 
         self.local_num_envs = self.num_envs
+        self.reset_mask = torch.zeros(self.num_envs, 1, device=self.device)
 
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
@@ -721,11 +723,11 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # print("[Isaac Env: Observations] \"Frame\" Pos: ", base_pos_w)
         # quad_pos_w, quad_ori_w, quad_lin_vel_w, quad_ang_vel_w = self.get_frame_state_from_task("vehicle")
         # Get COM info
-        # com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
+        com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
 
         # Calulate desired COM pos by subtracting the COM offset from the EE pos
-        # com_pos_ee_w = com_pos_w - base_pos_w
-        # com_pos_goal_w = goal_pos_w + com_pos_ee_w
+        com_pos_ee_w = com_pos_w - base_pos_w
+        com_pos_goal_w = goal_pos_w + com_pos_ee_w
 
         # ee_pos_w, ee_ori_w, ee_lin_vel_w, ee_ang_vel_w = self.get_frame_state_from_task("root")
         # print("[Isaac Env: Observations] Quad pos: ", quad_pos_w)
@@ -745,8 +747,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     body_ori_w,
                     body_lin_vel_w,
                     body_ang_vel_b,
-                    # com_pos_goal_w,
-                    self._desired_body_pos,
+                    com_pos_w,
+                    com_lin_vel_w,
+                    com_pos_goal_w,
+                    # self._desired_body_pos,
                     # g
                     # oal_ori_w,
                     # goal_yaw_w.unsqueeze(1),
@@ -760,6 +764,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     wrist_angle_required,
                     shoulder_error,
                     wrist_error,         
+                    self.reset_mask,
                 ],
                 dim=-1
             )
@@ -795,6 +800,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             )
         else:
             full_state = None
+
+        # Important: set the reset mask to 0 for all envs
+        self.reset_mask = torch.zeros(self.num_envs, 1, device=self.device)
 
         return {"policy": obs, "critic": critic_obs, "gc": gc_obs, "full_state": full_state}
     
@@ -1017,6 +1025,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         if env_ids is None or len(env_ids) == self.num_envs:
             env_ids = self._robot._ALL_INDICES
 
+        self.reset_mask[env_ids] = 1.0
+
         base_pos_w, base_ori_w, _, _ = self.get_frame_state_from_task(self.cfg.task_body)
 
         # Logging the episode sums
@@ -1225,16 +1235,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # update the markers
         # Update frame positions for debug visualization
-        self._frame_positions[:, 0] = self._robot.data.root_pos_w
+        pos, ori, _, _ = self.get_frame_state_from_task(self.cfg.task_body)
+        self._frame_positions[:, 0] = pos
         self._frame_positions[:, 1] = self._desired_pos_w
-        # self._frame_positions[:, 2] = self._robot.data.body_pos_w[:, self._body_id].squeeze(1)
-
-        # self._frame_positions[:, 2] = self._robot.data.body_pos_w[:, self._body_id].squeeze(1)
-        # self._frame_positions[:, 2] = com_pos_w
-        self._frame_orientations[:, 0] = self._robot.data.root_quat_w
+        self._frame_orientations[:, 0] = ori
         self._frame_orientations[:, 1] = self._desired_ori_w
-        # self._frame_orientations[:, 2] = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
-        
-        # self._frame_orientations[:, 2] = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
-        # self._frame_orientations[:, 2] = com_ori_w
         self.frame_visualizer.visualize(self._frame_positions.flatten(0, 1), self._frame_orientations.flatten(0,1))

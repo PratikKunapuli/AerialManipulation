@@ -62,8 +62,8 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
     spawn=sim_utils.UsdFileCfg(
         # usd_path=f"{MODELS_PATH}/aerial_manipulator_2dof.usd",
         # usd_path=f"{MODELS_PATH}/uam_2dof.usd",
-        usd_path=f"{MODELS_PATH}/uam_2dof_inertia.usd",
-
+        # usd_path=f"{MODELS_PATH}/uam_2dof_inertia.usd",
+        usd_path=f"{MODELS_PATH}/uam_2dof_pin_continuous.usd",
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
             max_depenetration_velocity=10.0,
@@ -85,10 +85,10 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
             ".*": 0.0,
         },
         joint_vel={
-            "prop1": 0.0,
-            "prop2": -0.0,
-            "prop3": 0.0,
-            "prop4": -0.0,
+            # "prop1": 0.0,
+            # "prop2": -0.0,
+            # "prop3": 0.0,
+            # "prop4": -0.0,
             # "joint1": 0.0,
             # "joint2": 0.0,
             "joint_wrist": 0.0,
@@ -118,11 +118,11 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
             armature=0.0,
             friction=0.0,
         ),
-        "dummy": ImplicitActuatorCfg(
-            joint_names_expr=[".*prop.*"],
-            stiffness=0.0,
-            damping=0.0,
-        ),
+        # "dummy": ImplicitActuatorCfg(
+        #     joint_names_expr=[".*prop.*"],
+        #     stiffness=0.0,
+        #     damping=0.0,
+        # ),
     },
 )
 """Configuration for the Aerial Manipulator 2DOF."""

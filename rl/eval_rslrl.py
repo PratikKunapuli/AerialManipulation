@@ -122,6 +122,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             env_cfg.reward_goal_body = "endeffector"
 
             # policy_path = "./baseline_cf_0dof/"
+        elif "2DOF" in args_cli.task:
+            env_cfg.task_body = "endeffector"
+            env_cfg.goal_body = "endeffector"
+            env_cfg.reward_task_body = "endeffector"
+            env_cfg.reward_goal_body = "endeffector"
+
+            # policy_path = "./baseline_2dof_0dof/"
         else:
             # env_cfg.task_body = "COM" 
             # env_cfg.goal_body = "COM"
