@@ -32,10 +32,15 @@
     <inertial>
       <mass value="0.8"/> <!-- 0.706028   83527633 -->
       <inertia ixx="0.003063" ixy="0.000004" ixz="0.000000" iyy="0.001720" iyz="0.000028" izz="0.004585"/>
-      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
     </inertial>
   </link>
   <link name="virtualvehicle">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="1.57079632679 0 0" />
       <geometry>
@@ -213,6 +218,11 @@
   </joint>
 
   <link name="arm">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <!-- Wrist Motor -->
     <visual>
       <origin xyz="0 0 -0.039999999999999994" rpy="0 3.14159265359 0" />
@@ -241,6 +251,11 @@
   </joint>
 
   <link name="gripper">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <!-- <inertial> -->
       <!-- <mass value="0.2"/> -->
     <!-- </inertial> -->
@@ -306,6 +321,11 @@
   </joint>
 
   <link name="COM">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+    </inertial>
     <visual>
       <geometry>
         <sphere radius="0.015"/>
@@ -317,12 +337,17 @@
   <joint name="com_placement" type="fixed" dont_collapse="true">
     <parent link="arm"/>
     <child link="COM"/>
-    <origin rpy="0 0 0" xyz="0 0 -0.05"/>
+    <origin rpy="0 0 0" xyz="0 0 -0.041"/>
   </joint>
 
 
 
   <link name="motor1">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -332,6 +357,11 @@
     </visual>
   </link>
   <link name="motor2">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -341,6 +371,11 @@
     </visual>
   </link>
   <link name="motor3">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -350,6 +385,11 @@
     </visual>
   </link>
   <link name="motor4">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -360,6 +400,11 @@
   </link>
 
   <link name="prop1">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -369,6 +414,11 @@
     </visual>
   </link>
   <link name="prop2">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -378,6 +428,11 @@
     </visual>
   </link>
   <link name="prop3">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
@@ -387,6 +442,11 @@
     </visual>
   </link>
   <link name="prop4">
+    <inertial>
+      <mass value="1e-10"/>
+      <inertia ixx="1e-10" ixy="1e-10" ixz="1e-10" iyy="1e-10" iyz="1e-10" izz="1e-10"/>
+      <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+    </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>

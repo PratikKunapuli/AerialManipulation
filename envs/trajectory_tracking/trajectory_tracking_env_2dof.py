@@ -158,7 +158,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
         lissajous_amplitudes = [0.0] * 6#[1.5, 1.5, 1.5, np.pi, np.pi, np.pi]
         lissajous_amplitudes_rand_ranges = [1.5, 1.5, 1.0, np.pi, np.pi, np.pi]
         lissajous_frequencies = [0.0] * 6#[1.5, 1.5, 1.5, 0.5, 0.5, 2.0]
-        lissajous_frequencies_rand_ranges = [1.5, 1.5, 1.5, 1.0, 1.0, 0.5]
+        lissajous_frequencies_rand_ranges = [1.5, 1.5, 1.5, 1.0, 1.0, 1.0]
         lissajous_phases = [0.0]*6
         lissajous_phases_rand_ranges = [np.pi]*6
         lissajous_offsets = [0.0, 0.0, 2.0, 0.0, 0.0, 0.0] # Higher z offset just to avoid fake crashes

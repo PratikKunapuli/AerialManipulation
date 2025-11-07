@@ -325,6 +325,7 @@ gc_params_dict = {
         },
     },
 
+    # Floating Base 2DOF Control
     "Isaac-AerialManipulator-2DOF-Hover-v0" : {
         "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
         "controller_params": {
@@ -332,24 +333,53 @@ gc_params_dict = {
             "kp_pos_gain_z": 15.0, #30.0,#24.167,
             "kd_pos_gain_xy": 10.0,#15.129,
             "kd_pos_gain_z": 10.0, #10.0,#6.081,
-            "kp_att_gain_xy": 100.0, #998.777,
-            # "kp_att_gain_x": 900.0,
+            "kp_att_gain_xy": 500.0, #998.777,
+            # "kp_att_gain_x": 1500.0,
             # "kp_att_gain_y": 900.0,
             "kp_att_gain_z": 15.0, #18.230,
-            # "kd_att_gain_xy": 20.0, # #10.821,
-            "kd_att_gain_x": 75.0,
-            "kd_att_gain_y": 100.0,
+            "kd_att_gain_xy": 20.0, # #10.821,
+            # "kd_att_gain_x": 75.0,
+            # "kd_att_gain_y": 100.0,
             "kd_att_gain_z": 75.0, #8.818,
             "kp_shoulder_gain": 0.0, 
             "kd_shoulder_gain": 0.0, 
             "kp_wrist_gain": 0.0, 
             "kd_wrist_gain": 0.0,
             "feed_forward": False,
-            "urdf_path": "../models/aerial_manipulator_2dof_pin.urdf", # path relative to controllers/decoupled_controller.py
-            # "disable_gravity": True,
+            "urdf_path": "../models/uam_2dof_pin.urdf", # path relative to controllers/decoupled_controller.py
+            "disable_gravity": False,
+            "use_com_control": False,
             # "use_integral": True,
         },
     },
+
+    # COM Control
+    # "Isaac-AerialManipulator-2DOF-Hover-v0" : {
+    #     "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
+    #     "controller_params": {
+    #         "kp_pos_gain_xy": 30.0,#43.507,
+    #         "kp_pos_gain_z": 20.0, #30.0,#24.167,
+    #         "kd_pos_gain_xy": 20.0,#15.129,
+    #         "kd_pos_gain_z": 12.0, #10.0,#6.081,
+    #         # "kp_att_gain_xy": 900.0, #998.777,
+    #         "kp_att_gain_x": 900.0,
+    #         "kp_att_gain_y": 1500.0,
+    #         "kp_att_gain_z": 500.0, #18.230,
+    #         # "kd_att_gain_xy": 20.0, # #10.821,
+    #         "kd_att_gain_x": 50.0,
+    #         "kd_att_gain_y": 75.0,
+    #         "kd_att_gain_z": 50.0, #8.818,
+    #         "kp_shoulder_gain": 1.0, 
+    #         "kd_shoulder_gain": 100.0, 
+    #         "kp_wrist_gain": 1.0, 
+    #         "kd_wrist_gain": 100.0,
+    #         "feed_forward": False,
+    #         "urdf_path": "../models/uam_2dof_pin.urdf", # path relative to controllers/decoupled_controller.py
+    #         "disable_gravity": False,
+    #         "use_com_control": True,
+    #         # "use_integral": True,
+    #     },
+    # },
 
     # Barely changed from original parameters
     # "Isaac-AerialManipulator-2DOF-Hover-v0" : {

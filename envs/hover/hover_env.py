@@ -340,6 +340,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Required attributes to achieve goal orientation
         self._desired_body_pos = torch.zeros(self.num_envs, 3, device=self.device)
+        self._desired_com_pos = torch.zeros_like(self._desired_body_pos)
 
         # Column 0 contains roll (shoulder), 1 contains pitch (wrist), 2 contains yaw (body yaw)
         self._desired_angles = torch.zeros_like(self._desired_body_pos)
@@ -447,6 +448,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         for i in range(self._robot.num_bodies):
             self.com_pos_w += self._robot.root_physx_view.get_masses()[0, i] * self._robot.root_physx_view.get_link_transforms()[0, i, :3].squeeze()
         self.com_pos_w /= self._robot.root_physx_view.get_masses()[0].sum()
+        self.com_offset = torch.linalg.norm(self.com_pos_w - ee_pos) # offset w.r.t to EE, slightly more useful than wrt to quad for calculating required position
+        # breakpoint()
 
         # self.com_pos_e, self.com_ori_e = subtract_frame_transforms(ee_pos, ee_ori, self.com_pos_w, quad_ori)
         self.com_pos_e, self.com_ori_e = subtract_frame_transforms(ee_pos, ee_ori, com_pos, com_ori)
@@ -726,8 +729,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
 
         # Calulate desired COM pos by subtracting the COM offset from the EE pos
-        com_pos_ee_w = com_pos_w - base_pos_w
-        com_pos_goal_w = goal_pos_w + com_pos_ee_w
+        # com_pos_ee_w = com_pos_w - base_pos_w
+        # com_pos_goal_w = goal_pos_w + com_pos_ee_w
 
         # ee_pos_w, ee_ori_w, ee_lin_vel_w, ee_ang_vel_w = self.get_frame_state_from_task("root")
         # print("[Isaac Env: Observations] Quad pos: ", quad_pos_w)
@@ -749,8 +752,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     body_ang_vel_b,
                     com_pos_w,
                     com_lin_vel_w,
-                    com_pos_goal_w,
-                    # self._desired_body_pos,
+                    self._desired_com_pos,
+                    self._desired_body_pos,
                     # g
                     # oal_ori_w,
                     # goal_yaw_w.unsqueeze(1),
@@ -1097,6 +1100,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # self._desired_wrist_angles = calculate_required_wrist(self._desired_ori_w, self._desired_wrist_angles, env_ids)
         self._desired_angles = calculate_required_angles(self._desired_ori_w, self._desired_angles, env_ids)
         self._desired_body_pos = calculate_required_pos(self._desired_ori_w, self._desired_pos_w, self._desired_body_pos, self.arm_length, env_ids)
+        self._desired_com_pos = calculate_required_pos(self._desired_ori_w, self._desired_pos_w, self._desired_com_pos, self.com_offset, env_ids)
 
         # Reset Robot state
         self._robot.reset()
