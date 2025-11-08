@@ -763,8 +763,6 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     wrist_joint_pos,
                     shoulder_joint_vel,
                     wrist_joint_vel,
-                    shoulder_angle_required,
-                    wrist_angle_required,
                     shoulder_error,
                     wrist_error,         
                     self.reset_mask,
