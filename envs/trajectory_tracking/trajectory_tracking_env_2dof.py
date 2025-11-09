@@ -200,27 +200,27 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     ori_error_reward_scale = -0.5 # -0.5
 
     lin_vel_reward_scale = -0.5 # -0.05
-    ang_vel_reward_scale = -0.1 # -0.01
+    ang_vel_reward_scale = -0.5 # -0.01
     body_ang_vel_reward_scale = -0.1
-    joint_vel_reward_scale = 0.0 # -0.01
-    action_thrust_norm_reward_scale = -0.001 # -0.01
-    action_moment_norm_reward_scale = -0.001 # -0.01
-    action_joint_norm_reward_scale = 0.0
+    joint_vel_reward_scale = -0.1 # -0.01
+    action_thrust_norm_reward_scale = -0.1 # -0.01
+    action_moment_norm_reward_scale = -0.1 # -0.01
+    action_joint_norm_reward_scale = -0.1
     previous_action_reward_scale = -0.1
     
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
-    yaw_radius_start = 0.8
+    yaw_radius_start = 1.5
     yaw_radius_curriculum = int(0) 
     yaw_smooth_transition_scale = 0.0
 
     shoulder_error_reward_scale = 0.0
-    shoulder_radius_start = 0.8
+    shoulder_radius_start = 1.5
     shoulder_radius_curriculum = int(0)
     shoulder_distance_reward_scale = 0.0
     
     wrist_error_reward_scale = -0.1 #-2.0 
-    wrist_radius_start = 0.8
+    wrist_radius_start = 0.2
     wrist_radius_curriculum = int(9e6)
     wrist_distance_reward_scale = 5.0#1.0
 
@@ -250,10 +250,10 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
 
     init_cfg = "default" # "default" or "rand"
 
-    task_body = "root" # "root" or "endeffector" or "vehicle" or "COM"
-    goal_body = "root" # "root" or "endeffector" or "vehicle" or "COM"
-    reward_task_body = "root"
-    reward_goal_body = "root"    
+    task_body = "endeffector" # "root" or "endeffector" or "vehicle" or "COM"
+    goal_body = "endeffector" # "root" or "endeffector" or "vehicle" or "COM"
+    reward_task_body = "endeffector"
+    reward_goal_body = "endeffector"    
     body_name = "vehicle"
     has_end_effector = True
     use_grav_vector = True
@@ -1613,11 +1613,12 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # update the markers
         # Update frame positions for debug visualization
         if self.cfg.viz_mode == "triad" or self.cfg.viz_mode == "frame":
-            self._frame_positions[:, 0] = self._robot.data.root_pos_w
+            pos, ori, _, _ = self.get_frame_state_from_task(self.cfg.task_body)
+            self._frame_positions[:, 0] = pos
             self._frame_positions[:, 1] = self._desired_pos_w
             # self._frame_positions[:, 2] = self._robot.data.body_pos_w[:, self._body_id].squeeze(1)
             # self._frame_positions[:, 2] = com_pos_w
-            self._frame_orientations[:, 0] = self._robot.data.root_quat_w
+            self._frame_orientations[:, 0] = ori
             self._frame_orientations[:, 1] = self._desired_ori_w
             # self._frame_orientations[:, 2] = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
             # self._frame_orientations[:, 2] = com_ori_w
