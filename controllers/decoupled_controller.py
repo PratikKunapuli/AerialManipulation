@@ -728,20 +728,9 @@ class DecoupledController():
         # wrist_pd_accel = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel
 
 
-        # M = torch.zeros(batch_size, 8, 8, device=self.device)
-        # C = torch.zeros(batch_size, 8, 8, device=self.device)
-        # g = torch.zeros(batch_size, 8, device=self.device)
-        # to_np = lambda x : x.detach().cpu().numpy() 
-        # quad_quat_scalar_last = isaac_math_utils.convert_quat(quad_ori_quat, to="xyzw")
-        # for i in range(batch_size):
-        #     q = np.concatenate([to_np(quad_pos_w[i]), to_np(quad_quat_scalar_last[i]), to_np(shoulder_joint_pos[i]), to_np(wrist_joint_pos[i])])
-        #     v = np.concatenate([to_np(quad_vel_b[i]), to_np(quad_omega_b[i]), to_np(shoulder_joint_vel[i]), to_np(wrist_joint_vel[i])])
-        #     M[i] = torch.as_tensor(pin.crba(self.model, self.model_data, q), device=self.device)
-        #     C[i] = torch.as_tensor(pin.computeCoriolisMatrix(self.model, self.model_data, q, v), device=self.device)
-        #     g[i] = torch.as_tensor(pin.computeGeneralizedGravity(self.model, self.model_data, q), device=self.device)
-
         # Calculate all desired accelerations
-        f_des = self.mass * (-self.kp_pos * (quad_pos_w - quad_pos_goal_w) - self.kd_pos * quad_vel_w + self.gravity.tile(batch_size, 1))
+        lin_pd = -self.kp_pos * (quad_pos_w - quad_pos_goal_w) - self.kd_pos * quad_vel_w
+        f_des = self.mass * (lin_pd + self.gravity.tile(batch_size, 1))
 
 
         # breakpoint()
@@ -761,12 +750,41 @@ class DecoupledController():
 
         grav_angle = self.get_angle_to_horizontal(shoulder_joint_pos, quad_ori_quat)
         grav_torque = 0.2 * 0.1 * torch.cos(grav_angle) * 9.81 # hardcoded arm length and mass
-        u_shoulder = (-self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel - self.ki_shoulder * self.shoulder_error_integral) * self.arm_inertia[0, 0] + grav_torque
-        u_wrist = (-self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel - self.ki_wrist * self.wrist_error_integral) * self.arm_inertia[-1, -1]
+        shoulder_pd = -self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel - self.ki_shoulder * self.shoulder_error_integral
+        u_shoulder = shoulder_pd * self.arm_inertia[0, 0] + grav_torque
+        wrist_pd = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel - self.ki_wrist * self.wrist_error_integral
+        u_wrist = wrist_pd * self.arm_inertia[-1, -1]
         f_des = (f_des * R_actual[:, :, 2]).sum(dim=1).unsqueeze(1)
 
         u = torch.cat([f_des, M_des, u_shoulder, u_wrist], dim=1)
-        return u
+
+        # delta u to accounting for full dynamics
+        # M = torch.zeros(batch_size, 8, 8, device=self.device)
+        # C = torch.zeros(batch_size, 8, 8, device=self.device)
+        # g = torch.zeros(batch_size, 8, device=self.device)
+        # to_np = lambda x : x.detach().cpu().numpy() 
+        # quad_quat_scalar_last = isaac_math_utils.convert_quat(quad_ori_quat, to="xyzw")
+        # B = torch.zeros(batch_size, 8, 6, device=self.device)
+        # B[:, -6:, -6:] = torch.eye(6, device=self.device)
+        # q = torch.concatenate([quad_pos_w, quad_quat_scalar_last, shoulder_joint_pos, wrist_joint_pos], dim=1)
+        # v = torch.concatenate([quad_vel_b, quad_omega_b, shoulder_joint_vel, wrist_joint_vel], dim=1)
+        # for i in range(batch_size):
+        #     M[i] = torch.as_tensor(pin.crba(self.model, self.model_data, to_np(q[i])), device=self.device)
+        #     C[i] = torch.as_tensor(pin.computeCoriolisMatrix(self.model, self.model_data, to_np(q[i]), to_np(v[i])), device=self.device)
+        #     g[i] = torch.as_tensor(pin.computeGeneralizedGravity(self.model, self.model_data, to_np(q[i])), device=self.device)
+        # B_pinv = torch.linalg.pinv(B)
+        # # linear acceleration to body frame
+        # lin_pd = isaac_math_utils.quat_rotate_inverse(quad_ori_quat, lin_pd)
+        # lin_pd = lin_pd - torch.bmm(math_utils.hat_map(quad_omega_b), lin_pd.unsqueeze(-1)).squeeze(-1)
+
+        # accel_des = torch.cat([lin_pd, att_pd, shoulder_pd, wrist_pd], dim=1)
+        # Mvdot = torch.bmm(M, accel_des.unsqueeze(-1))
+        # Cv = torch.bmm(C, v.unsqueeze(-1))
+        # Bu = torch.bmm(B, u.unsqueeze(-1))
+        # g = g.unsqueeze(-1)
+        # Mvdot_actual = Bu - Cv - g
+        # delta_u = torch.bmm(B_pinv, Mvdot - Mvdot_actual).squeeze()
+        return u #+ delta_u
 
 
     def get_angle_to_horizontal(self, shoulder_angle, quad_ori_quat):
