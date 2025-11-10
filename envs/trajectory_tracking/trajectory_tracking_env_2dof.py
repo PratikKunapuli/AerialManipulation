@@ -190,7 +190,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     body_pos_distance_reward_scale = 10.0 #15.0
 
     ee_pos_radius_start = 0.8
-    ee_pos_radius_curriculum = int(9e6) #int(2e7) # 10e6
+    ee_pos_radius_curriculum = int(2e7) #int(2e7) # 10e6
     ee_pos_error_reward_scale = -0.5 # -1.0
     ee_pos_distance_reward_scale = 15.0 #15.0
 
