@@ -190,12 +190,12 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     body_pos_distance_reward_scale = 10.0 #15.0
 
     ee_pos_radius_start = 0.8
-    ee_pos_radius_curriculum = int(2e7) #int(2e7) # 10e6
+    ee_pos_radius_curriculum = int(9e6) #int(2e7) # 10e6
     ee_pos_error_reward_scale = -0.5 # -1.0
     ee_pos_distance_reward_scale = 15.0 #15.0
 
     ori_radius_start = 0.8
-    ori_radius_curriculum = int(3e7) #int(2e7)
+    ori_radius_curriculum = int(9e6) #int(2e7)
     ori_distance_reward_scale = 5.0
     ori_error_reward_scale = -0.5 # -0.5
 
@@ -205,7 +205,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     joint_vel_reward_scale = -0.1 # -0.01
     action_thrust_norm_reward_scale = -0.1 # -0.01
     action_moment_norm_reward_scale = -0.1 # -0.01
-    action_joint_norm_reward_scale = -0.1
+    action_joint_norm_reward_scale = -0.01
     previous_action_reward_scale = -0.1
     
     yaw_error_reward_scale = 0.0 # -0.01
@@ -220,7 +220,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     shoulder_distance_reward_scale = 0.0
     
     wrist_error_reward_scale = -0.1 #-2.0 
-    wrist_radius_start = 0.2
+    wrist_radius_start = 0.8
     wrist_radius_curriculum = int(9e6)
     wrist_distance_reward_scale = 5.0#1.0
 
@@ -961,7 +961,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             shoulder_joint_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx].unsqueeze(1)
         if self.cfg.num_joints > 1:
             wrist_joint_pos = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
-            wrist_joint_vel = self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1)
+            wrist_joint_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx].unsqueeze(1)
 
         # Previous Action
         if self.cfg.use_previous_actions:
