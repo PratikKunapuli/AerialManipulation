@@ -170,3 +170,6 @@ rl/logs
 rl/runs
 rl/outputs
 rl/slurm_outputs/
+
+# Hydra configs
+.hydra

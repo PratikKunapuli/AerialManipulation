@@ -83,7 +83,7 @@ class DecoupledController():
                   ki_pos_gain_xy=0.0, ki_pos_gain_z=0.0, ki_att_gain_xy=0.0, ki_att_gain_z=0.0,
                   kp_shoulder_gain=0.1, kd_shoulder_gain=1.0, ki_shoulder_gain=0.0, kp_wrist_gain=0.1, kd_wrist_gain=1.0, ki_wrist_gain=0.0,
                   tuning_mode=False, use_full_obs=False, skip_precompute=False, vehicle="AM", control_mode="CTBM", policy_dt=0.02,
-                  feed_forward=False, use_integral = False, disable_gravity=False, use_com_control=True, **kwargs):
+                  feed_forward=False, use_integral = False, disable_gravity=False, use_com_control=False, **kwargs):
         self.num_envs = num_envs
         self.num_dofs = num_dofs
         self.print_debug = print_debug
@@ -127,6 +127,17 @@ class DecoupledController():
 
         self.arm_length = arm_length
         self.arm_inertia = arm_inertia.to(self.device)
+        if num_dofs > 0:
+            # Inertia offset due to arm pivot being at end
+            d_vec = torch.tensor([0.0, 0.0, self.arm_length/2], device=self.device)
+            adjust = torch.dot(d_vec, d_vec) * torch.eye(3, device=self.device) - torch.outer(d_vec, d_vec)
+            self.arm_inertia = self.arm_inertia + self.arm_mass * adjust
+            # breakpoint()
+            
+            # d2 = (self.arm_length / 2) ** 2
+            # self.arm_inertia = self.arm_inertia + self.arm_mass * torch.diag(
+            #     torch.tensor([d2, d2, 0.0], device=self.device)
+            # )
         
         self.initial_yaw_offset = torch.tensor([[0.7071, 0, 0, -0.7071]], device=self.device)
 
@@ -714,7 +725,6 @@ class DecoupledController():
         wrist_error = obs[:, 31:32]
         reset_mask = obs[:, 32]
 
-        assert hasattr(self, "model"), "Model must be provided for Aerial Manipulator 2DOF controller!"
 
         self.wrist_error_integral[reset_mask.bool()] = 0.0
         self.wrist_error_integral += wrist_error * self.policy_dt
@@ -734,7 +744,7 @@ class DecoupledController():
 
 
         # breakpoint()
-        R_des = torch.bmm(flat_utils.H2(f_des), flat_utils.H1(quad_desired_yaw))
+        R_des = flat_utils.getRotationFromShape(f_des, quad_desired_yaw)
         # for pinocchio, place desired acceleration in body frame - also don't need the gravity term now since it'll be added back
         # in the manipulator equation
         # accel_des = isaac_math_utils.quat_rotate_inverse(quad_ori_quat, accel_des)
@@ -755,6 +765,10 @@ class DecoupledController():
         wrist_pd = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel - self.ki_wrist * self.wrist_error_integral
         u_wrist = wrist_pd * self.arm_inertia[-1, -1]
         f_des = (f_des * R_actual[:, :, 2]).sum(dim=1).unsqueeze(1)
+
+        # u_shoulder = 0.1*torch.ones_like(u_shoulder)
+        # u_wrist = torch.zeros_like(u_wrist)
+        # print(f"DEBUG: expected shoulder accel: {u_shoulder / self.arm_inertia[0, 0]}")
 
         u = torch.cat([f_des, M_des, u_shoulder, u_wrist], dim=1)
 

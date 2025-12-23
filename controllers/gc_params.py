@@ -330,20 +330,20 @@ gc_params_dict = {
         "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
         "controller_params": {
             "kp_pos_gain_xy": 15.0,#43.507,
-            "kp_pos_gain_z": 15.0, #30.0,#24.167,
+            "kp_pos_gain_z": 20.0, #30.0,#24.167,
             "kd_pos_gain_xy": 10.0,#15.129,
-            "kd_pos_gain_z": 10.0, #10.0,#6.081,
+            "kd_pos_gain_z": 15.0, #10.0,#6.081,
             "kp_att_gain_xy": 900.0, #998.777,
             # "kp_att_gain_x": 1500.0,
             # "kp_att_gain_y": 900.0,
-            "kp_att_gain_z": 30.0, #18.230,
+            "kp_att_gain_z": 75.0, #18.230,
             "kd_att_gain_xy": 75.0, # #10.821,
             # "kd_att_gain_x": 75.0,
             # "kd_att_gain_y": 100.0,
-            "kd_att_gain_z": 75.0, #8.818,
+            "kd_att_gain_z": 10.0, #8.818,
             "kp_shoulder_gain": 80.0, 
             "kd_shoulder_gain": 20.0, 
-            "ki_shoulder_gain": 10.0,
+            "ki_shoulder_gain": 20.0,
             "kp_wrist_gain": 40.0, 
             "kd_wrist_gain": 75.0,
             "ki_wrist_gain": 30.0,
@@ -354,6 +354,32 @@ gc_params_dict = {
             # "use_integral": True,
         },
     },
+
+    # Floating Base 2DOF Control - optimized parameters
+    # "Isaac-AerialManipulator-2DOF-Hover-v0" : {
+    #     "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
+    #     "controller_params": {
+    #         'kp_pos_gain_xy': 10.864343896283806,
+    #         'kp_pos_gain_z': 21.344419878389502,
+    #         'kd_pos_gain_xy': 8.510159317975543,
+    #         'kd_pos_gain_z': 8.914690161343609,
+    #         'kp_att_gain_xy': 948.5395278850797,
+    #         'kp_att_gain_z': 43.426317251530804,
+    #         'kd_att_gain_xy': 78.6667316876716,
+    #         'kd_att_gain_z': 11.062822842740095,
+    #         'kp_shoulder_gain': 71.93153871760133,
+    #         'kd_shoulder_gain': 21.4529697285801,
+    #         'ki_shoulder_gain': 19.295319670265876,
+    #         'kp_wrist_gain': 52.71748774106234,
+    #         'kd_wrist_gain': 62.80529497408098,
+    #         'ki_wrist_gain': 31.32437095610909,
+    #         "feed_forward": False,
+    #         "urdf_path": "../models/uam_2dof_pin.urdf", # path relative to controllers/decoupled_controller.py
+    #         "disable_gravity": False,
+    #         "use_com_control": False,
+    #         # "use_integral": True,
+    #     },
+    # },
 
     # COM Control
     # "Isaac-AerialManipulator-2DOF-Hover-v0" : {
@@ -402,5 +428,34 @@ gc_params_dict = {
     #         "feed_forward": False,
     #     },
     # },
+    # Floating Base 2DOF Control - shoulder joint error enforcing actual shoulder joint position
+    "Isaac-AerialManipulator-2DOF-Hover-v0" : {
+        "log_dir": "./baseline_2dof_quad_control_reward_tune_no_ff_hover/",
+        "controller_params": {
+            "kp_pos_gain_xy": 15.0,#43.507,
+            "kp_pos_gain_z": 15.0, #30.0,#24.167,
+            "kd_pos_gain_xy": 10.0,#15.129,
+            "kd_pos_gain_z": 10.0, #10.0,#6.081,
+            "kp_att_gain_xy": 900.0, #998.777,
+            # "kp_att_gain_x": 1500.0,
+            # "kp_att_gain_y": 900.0,
+            "kp_att_gain_z": 30.0, #18.230,
+            "kd_att_gain_xy": 75.0, # #10.821,
+            # "kd_att_gain_x": 75.0,
+            # "kd_att_gain_y": 100.0,
+            "kd_att_gain_z": 10.0, #8.818,
+            "kp_shoulder_gain": 50.0, 
+            "kd_shoulder_gain": 20.0, 
+            "ki_shoulder_gain": 20.0,
+            "kp_wrist_gain": 40.0, 
+            "kd_wrist_gain": 75.0,
+            "ki_wrist_gain": 30.0,
+            "feed_forward": False,
+            "urdf_path": "../models/uam_2dof_pin.urdf", # path relative to controllers/decoupled_controller.py
+            "disable_gravity": False,
+            "use_com_control": False,
+            # "use_integral": True,
+        },
+    },
 }
 
