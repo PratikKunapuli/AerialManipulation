@@ -569,9 +569,6 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             base_pos_w, base_ori_w, 
             goal_pos_w, goal_ori_w
         )
-        wrist_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
-        yaw_error = yaw_error_from_quats(base_ori_w, goal_ori_w, dof=self.cfg.num_joints)
-        shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
 
         # Get vehicle frame info
         body_pos_w, body_ori_w, body_lin_vel_w, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
@@ -583,6 +580,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         goal_pos_body, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
                                                           goal_pos_w, body_ori_w)
         body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
+
+        wrist_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
+        yaw_error = yaw_error_from_quats(body_ori_w, goal_ori_w, dof=self.cfg.num_joints)
+        shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
 
         # Compute the linear and angular velocities of the end-effector in body frame
         lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_w)
@@ -692,9 +693,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             id_rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).tile((self.num_envs, 1))
             shoulder_angle_required = -shoulder_angle_error_from_quats(id_rotation, goal_ori_w)
             wrist_angle_required = -wrist_angle_error_from_quats(id_rotation, goal_ori_w)
-            yaw_required = yaw_error_from_quats(id_rotation, goal_ori_w, self.cfg.num_joints).unsqueeze(1)
+            yaw_required = -yaw_error_from_quats(id_rotation, goal_ori_w, self.cfg.num_joints).unsqueeze(1)
             shoulder_error = shoulder_joint_pos - shoulder_angle_required
-            # goal_yaw_w = yaw_quat(goal_ori_w)
+            wrist_error = wrist_joint_pos - wrist_angle_required
+            # goal_yaw_w = yaw_quat(goal_ori_w) 
             # goal_yaw_w = euler_xyz_from_quat(goal_yaw_w)[-1]
             gc_obs = torch.cat(
                 [
@@ -710,8 +712,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     # g
                     # oal_ori_w,
                     # goal_yaw_w.unsqueeze(1),
-                    yaw_from_quat(goal_ori_w).unsqueeze(1),
-                    # yaw_required,
+                    # yaw_from_quat(goal_ori_w).unsqueeze(1),
+                    yaw_required,
                     shoulder_joint_pos,
                     wrist_joint_pos,
                     shoulder_joint_vel,
