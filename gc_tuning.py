@@ -3,6 +3,7 @@ import argparse
 import sys
 # from isaacsim import SimulationApp
 from omni.isaac.lab.app import AppLauncher
+import utils.assets # import needed bc of some directory finding issues when running this script from rl directory
 
 
 parser = argparse.ArgumentParser(description="Run demo with Isaac Sim")
@@ -67,14 +68,22 @@ def eval_trial(trial):
     steps = 0
     terminated_count = 0
 
-    pos_kp_gain_xy = trial.suggest_float("pos_kp_gain_xy", 0.0, 50.0)
-    pos_kp_gain_z = trial.suggest_float("pos_kp_gain_z", 0.0, 50.0)
-    pos_kd_gain_xy = trial.suggest_float("pos_kd_gain_xy", 0.0, 20.0)
-    pos_kd_gain_z = trial.suggest_float("pos_kd_gain_z", 0.0, 20.0)
-    ori_kp_gain_xy = trial.suggest_float("ori_kp_gain_xy", 0.0, 1000.0)
-    ori_kp_gain_z = trial.suggest_float("ori_kp_gain_z", 0.0, 20.0)
-    ori_kd_gain_xy = trial.suggest_float("ori_kd_gain_xy", 0.0, 200.0)
-    ori_kd_gain_z = trial.suggest_float("ori_kd_gain_z", 0.0, 10.0)
+    pos_kp_gain_xy = trial.suggest_float("kp_pos_gain_xy", 0.0, 10.0)
+    pos_kp_gain_z = trial.suggest_float("kp_pos_gain_z", 0.0, 10.0)
+    pos_kd_gain_xy = trial.suggest_float("kd_pos_gain_xy", 0.0, 10.0)
+    pos_kd_gain_z = trial.suggest_float("kd_pos_gain_z", 0.0, 10.0)
+    ori_kp_gain_xy = trial.suggest_float("kp_att_gain_xy", 0.0, 30.0)
+    ori_kp_gain_z = trial.suggest_float("kp_att_gain_z", 0.0, 20.0)
+    ori_kd_gain_xy = trial.suggest_float("kd_att_gain_xy", 0.0, 15.0)
+    ori_kd_gain_z = trial.suggest_float("kd_att_gain_z", 0.0, 10.0)
+
+    if "2DOF" in args_cli.task:
+        kp_shoulder_gain = trial.suggest_float("kp_shoulder_gain", 0.0, 10.0)
+        kd_shoulder_gain = trial.suggest_float("kd_shoulder_gain", 0.0, 10.0)
+        ki_shoulder_gain = trial.suggest_float("ki_shoulder_gain", 0.0, 0.0)
+        kp_wrist_gain = trial.suggest_float("kp_wrist_gain", 0.0, 10.0)
+        kd_wrist_gain = trial.suggest_float("kd_wrist_gain", 0.0, 10.0)
+        ki_wrist_gain = trial.suggest_float("ki_wrist_gain", 0.0, 0.0)
 
     if use_integral_terms:
         pos_ki_gain_xy = trial.suggest_float("pos_ki_gain_xy", 0.0, 20.0)
@@ -85,23 +94,34 @@ def eval_trial(trial):
     rewards = torch.zeros(args_cli.num_envs, device=env.device)
 
 
-    if "Traj" in args_cli.task:
-        if not use_integral_terms:
-            gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
-                                    kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
-                                    kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
-                                    tuning_mode=False, feed_forward=use_feed_forward_terms)
+    if "2DOF" not in args_cli.task:
+        if "Traj" in args_cli.task:
+            if not use_integral_terms:
+                gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+                                        kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
+                                        kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
+                                        tuning_mode=False, feed_forward=use_feed_forward_terms)
+            else:
+                gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+                                        kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
+                                        kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
+                                        ki_pos_gain_xy=pos_ki_gain_xy, ki_pos_gain_z=pos_ki_gain_z, ki_att_gain_xy=ori_ki_gain_xy, ki_att_gain_z=ori_ki_gain_z,
+                                        tuning_mode=False, feed_forward=False, use_integral=True)
         else:
             gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
                                     kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
                                     kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
-                                    ki_pos_gain_xy=pos_ki_gain_xy, ki_pos_gain_z=pos_ki_gain_z, ki_att_gain_xy=ori_ki_gain_xy, ki_att_gain_z=ori_ki_gain_z,
-                                    tuning_mode=False, feed_forward=False, use_integral=True)
+                                    tuning_mode=False)
     else:
-        gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+        arm_inertia = env.arm_inertia
+        arm_length = env.arm_length
+        gc = DecoupledController(args_cli.num_envs, 2, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
                                 kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
                                 kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
-                                tuning_mode=False)
+                                kp_shoulder_gain=kp_shoulder_gain, kd_shoulder_gain=kd_shoulder_gain, ki_shoulder_gain=ki_shoulder_gain,
+                                kp_wrist_gain=kp_wrist_gain, kd_wrist_gain=kd_wrist_gain, ki_wrist_gain=ki_wrist_gain,
+                                arm_inertia=arm_inertia, arm_length=arm_length, tuning_mode=False)
+
 
     while steps < 500:
         obs_tensor = obs_dict["policy"]
@@ -154,11 +174,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     env_cfg.sim.render_interval = env_cfg.decimation
     env_cfg.gc_mode = True
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
-    env_cfg.task_body = "COM"
-    env_cfg.goal_body = "COM"
+    env_cfg.task_body = "endeffector"
+    env_cfg.goal_body = "endeffector"
 
     # Reward shaping
-    env_cfg.pos_radius = 0.1
+    # env_cfg.pos_radius = 0.1
     # env_cfg.pos_distance_reward_scale = 0.0
     # env_cfg.pos_error_reward_scale = -2.0
     # env_cfg.yaw_error = -2.0
@@ -168,7 +188,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     global env
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
 
-    study_name = "Position Radius 0.1: " + args_cli.task
+    study_name = args_cli.task
 
     if use_integral_terms:
         study_name += " Integral Terms"
@@ -176,7 +196,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     if use_feed_forward_terms:
         study_name += " Feed Forward Terms"
 
-    study_name += " Hover" if 0.0 in env_cfg.lissajous_amplitudes_rand_ranges else " Trajectory Tracking"
+    study_name += " Hover" if "Hover" in args_cli.task else " Trajectory Tracking"
     
     study = optuna.create_study(direction="maximize",
                                 study_name=study_name, storage="sqlite:///database_gc_tuning.sqlite3", load_if_exists=True,
