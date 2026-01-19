@@ -103,27 +103,27 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     body_pos_radius_start = 0.8
     body_pos_radius_curriculum = int(9e6) #int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
-    body_pos_distance_reward_scale = 10.0 #15.0
+    body_pos_distance_reward_scale = 0.0 #15.0
 
     ee_pos_radius_start = 0.8
-    ee_pos_radius_curriculum = int(2e7) #int(2e7) # 10e6
-    ee_pos_error_reward_scale = 0.0 # -1.0
+    ee_pos_radius_curriculum = int(1.5e7) #int(2e7) # 10e6
+    ee_pos_error_reward_scale = 0.0
     ee_pos_distance_reward_scale = 15.0 #15.0
 
     ori_radius_start = 0.8
     ori_radius_curriculum = int(3e7) #int(2e7)
-    ori_distance_reward_scale = 5.0
-    ori_error_reward_scale = 0.0 # -0.5
+    ori_distance_reward_scale = 20.0
+    ori_error_reward_scale = 0.0
 
     axis_distance_reward_scale = 0.0
     axis_radius = 4.0#1.5 # threshold for axis alignment error under which we will count ori rewards
 
     lin_vel_reward_scale = -0.5 # -0.05
-    ang_vel_reward_scale = -0.1 # -0.01
+    ang_vel_reward_scale = -0.5 # -0.01
     joint_vel_reward_scale = 0.0 # -0.01
-    action_prop_norm_reward_scale = -0.001 # -0.01
-    action_joint_norm_reward_scale = 0.0
-    previous_action_reward_scale = -0.1
+    action_prop_norm_reward_scale = 0.0 # -0.01
+    action_joint_norm_reward_scale = 0.0 # 0.0
+    previous_action_reward_scale = 0.0 # -0.1
     
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
@@ -136,10 +136,10 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     shoulder_radius_curriculum = int(9e6)
     shoulder_distance_reward_scale = 0.0
     
-    wrist_error_reward_scale = 0.0 #-2.0 
-    wrist_radius_start = 0.2
+    wrist_error_reward_scale = 0.0 
+    wrist_radius_start = 0.8
     wrist_radius_curriculum = int(9e6)
-    wrist_distance_reward_scale = 5.0#1.0
+    wrist_distance_reward_scale = 0.0#1.0
 
     stay_alive_reward = 0.0
     crash_penalty = -1.0
@@ -459,6 +459,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # print("[Isaac Init] COM Pos: ", self.com_pos_w)
         # print("[Isaac Init] COM pos EE frame: ", self.com_pos_e)
 
+        # Initial orientation of the end effector - for use in the baseline controller
+        self.initial_ee_ori = ee_ori.clone()
+
 
         self.position_offset = quad_pos
         # self.orientation_offset = quat_mul(quad_ori, quat_conjugate(ee_ori))
@@ -475,6 +478,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         self.local_num_envs = self.num_envs
         self.reset_mask = torch.zeros(self.num_envs, 1, device=self.device)
+        self.crash_mask = torch.zeros(self.num_envs, device=self.device, dtype=torch.bool)
 
         # add handle for debug visualization (this is set to a valid handle inside set_debug_vis)
         self.set_debug_vis(self.cfg.debug_vis)
@@ -581,9 +585,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                                                           goal_pos_w, body_ori_w)
         body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
 
-        wrist_error = wrist_angle_error_from_quats(base_ori_w, goal_ori_w)
-        yaw_error = yaw_error_from_quats(body_ori_w, goal_ori_w, dof=self.cfg.num_joints)
-        shoulder_error = shoulder_angle_error_from_quats(base_ori_w, goal_ori_w)
+        yaw_error, shoulder_error, wrist_error = aerial_manipulator_angle_errors(base_ori_w, goal_ori_w)
 
         # Compute the linear and angular velocities of the end-effector in body frame
         lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_w)
@@ -601,7 +603,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             grav_vector_b = torch.zeros(self.num_envs, 0, device=self.device)
             grav_vector_b_body = torch.zeros(self.num_envs, 0, device=self.device)
 
-        body_ori_error_b = torch.stack((body_roll, body_pitch, yaw_error), dim=1).squeeze(-1)
+        body_ori_error_b = torch.stack((body_roll, body_pitch, yaw_error.squeeze()), dim=1).squeeze(-1)
         if self.cfg.use_full_ori_matrix:
             ori_representation_b = matrix_from_quat(ori_error_b).flatten(-2, -1)
             body_ori_representation = matrix_from_quat(body_ori_w).flatten(-2, -1)
@@ -609,7 +611,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         else:
             ori_representation_b = ori_error_b
             body_ori_representation = body_ori_w
-            body_ori_error_b = quat_from_euler_xyz(body_roll, body_pitch, yaw_error)
+            body_ori_error_b = quat_from_euler_xyz(body_roll, body_pitch, yaw_error.squeeze())
 
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
@@ -634,13 +636,16 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                 ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
                 # goal_pos_body,
                 body_pos_error,
-                body_ori_error_b,
+                # body_ori_error_b,
+                body_ori_representation,
                 grav_vector_b,
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
-                wrist_error,
+                # wrist_error,
                 # shoulder_embeddings,
                 # wrist_embeddings,
+                shoulder_joint_pos,
+                wrist_joint_pos,
                 shoulder_joint_vel,
                 wrist_joint_vel,
                 self._previous_actions,
@@ -657,14 +662,15 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     pos_error_b,                                # (num_envs, 3) [0-2]
                     ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
                     body_pos_error,
-                    body_ori_error_b,
+                    body_ori_representation,
+                    # body_ori_error_b,
                     grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
                     # grav_vector_b_body,
                     lin_vel_b,                                  # (num_envs, 3)
                     ang_vel_b,                                  # (num_envs, 3)
                     body_lin_vel_b,
                     body_ang_vel_b,                    
-                    wrist_error,
+                    # wrist_error,
                     shoulder_joint_pos,
                     wrist_joint_pos,
                     shoulder_joint_vel,
@@ -690,14 +696,15 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         # print("[Isaac Env: Observations] EE pos: ", ee_pos_w)
 
         if self.cfg.gc_mode:
-            id_rotation = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).tile((self.num_envs, 1))
-            shoulder_angle_required = -shoulder_angle_error_from_quats(id_rotation, goal_ori_w)
-            wrist_angle_required = -wrist_angle_error_from_quats(id_rotation, goal_ori_w)
-            yaw_required = -yaw_error_from_quats(id_rotation, goal_ori_w, self.cfg.num_joints).unsqueeze(1)
-            shoulder_error = shoulder_joint_pos - shoulder_angle_required
-            wrist_error = wrist_joint_pos - wrist_angle_required
-            # goal_yaw_w = yaw_quat(goal_ori_w) 
-            # goal_yaw_w = euler_xyz_from_quat(goal_yaw_w)[-1]
+            start_ori = self.initial_ee_ori.tile((self.num_envs, 1))
+            yaw_req, shoulder_req, wrist_req = aerial_manipulator_angle_errors(start_ori, goal_ori_w)
+            # Swap signs to follow error convention
+            yaw_req = -yaw_req
+            shoulder_req = -shoulder_req
+            wrist_req = -wrist_req
+            shoulder_error_2 = wrap_to_pi(shoulder_joint_pos - shoulder_req)
+            wrist_error_2 = wrist_joint_pos - wrist_req
+            wrist_error_2 = wrap_to_pi(wrist_error_2)
             gc_obs = torch.cat(
                 [
                     # com_pos_w,
@@ -713,13 +720,13 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     # oal_ori_w,
                     # goal_yaw_w.unsqueeze(1),
                     # yaw_from_quat(goal_ori_w).unsqueeze(1),
-                    yaw_required,
+                    yaw_req,
                     shoulder_joint_pos,
                     wrist_joint_pos,
                     shoulder_joint_vel,
                     wrist_joint_vel,
-                    shoulder_error,
-                    wrist_error,         
+                    shoulder_error_2,
+                    wrist_error_2,         
                     self.reset_mask,
                 ],
                 dim=-1
@@ -749,8 +756,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
                     wrist_error,                                 # (num_envs, 1) [43]
                     pos_error_b,                                # (num_envs, 3) [44-46]
                     body_pos_error,                             # (num_envs, 3) [47-49]
-                    yaw_error.unsqueeze(1),                                  # (num_envs, 1) [50]
+                    yaw_error,                                  # (num_envs, 1) [50]
                     shoulder_error,                             # (num_envs, 1) [51]
+                    ori_error_b, # (num_envs, 4) [52]
                 ],
                 dim=-1                                          # (num_envs, 52)
             )
@@ -847,9 +855,14 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         else:
             # _ , body_ori_w, _, _ = self.get_frame_state_from_task("vehicle")
             # body_yaw = yaw_from_quat(body_ori_w)
-            yaw_error = torch.abs(yaw_error_from_quats(goal_ori_w, base_ori_w, 2))
-            shoulder_joint_error = torch.abs(shoulder_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
-            wrist_joint_error = torch.abs(wrist_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
+            yaw_error, shoulder_joint_error, wrist_joint_error = aerial_manipulator_angle_errors(base_ori_w, goal_ori_w)
+            yaw_error = yaw_error.abs().squeeze()
+            shoulder_joint_error = shoulder_joint_error.abs().squeeze()
+            wrist_joint_error = wrist_joint_error.abs().squeeze()
+
+            # yaw_error = torch.abs(yaw_error_from_quats(goal_ori_w, base_ori_w, 2))
+            # shoulder_joint_error = torch.abs(shoulder_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
+            # wrist_joint_error = torch.abs(wrist_angle_error_from_quats(base_ori_w, goal_ori_w).squeeze())
             shoulder_joint_distance = torch.exp(- (shoulder_joint_error **2) / self.shoulder_radius)
             wrist_joint_distance = torch.exp(- (wrist_joint_error **2) / self.wrist_radius)
             # wrist_joint_distance = (1.0 + torch.cos(wrist_joint_error)) / 2.0
@@ -910,6 +923,9 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             action_error = action_error ** 2
             combined_distance = combined_distance ** 2
             # NOTE: didn't square the previous action error, that is in the traj tracking env though
+            action_delta_error = action_delta_error ** 2
+            wrist_joint_error = wrist_joint_error ** 2
+            shoulder_joint_error = shoulder_joint_error ** 2
 
         crash_penalty_time = self.cfg.crash_penalty * (self.max_episode_length - self.episode_length_buf)
 
@@ -983,6 +999,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Check if the robot is too high
         # died = torch.logical_or(died, self._robot.data.root_pos_w[:, 2] > 10.0)
+        self.crash_mask = self.crash_mask | died
 
         time_out = self.episode_length_buf >= self.max_episode_length - 1
         return died, time_out
@@ -1021,6 +1038,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         extras["Metrics/Quad Position Radius"] = self.body_pos_radius
         extras["Metrics/Ori Radius"] = self.ori_radius
         extras["Metrics/Wrist Radius"] = self.wrist_radius
+        extras["Metrics/Unique Crashes"] = torch.count_nonzero(self.crash_mask).item()
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
 
