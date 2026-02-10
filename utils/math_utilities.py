@@ -1,4 +1,5 @@
 import torch
+import numpy as np
 import omni.isaac.lab.utils.math as isaac_math_utils
 from typing import Tuple
 
@@ -195,53 +196,192 @@ def wrist_angle_error_from_quats(q1: torch.Tensor, q2: torch.Tensor):
     q1 = q1.reshape(-1, 4)
     q2 = q2.reshape(-1, 4)
 
-    # Step 1: Find the quaternion that will rotate the local y-vector of frame 1 to frame 2 
-    # (this is the vector that points axially through the EE).
-    # Based on https://stackoverflow.com/questions/1171849/finding-quaternion-representing-the-rotation-from-one-vector-to-another
-    y_1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
-    y_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
-    # needed if y_1 and y_2 are aligned, plus for a later calculation
-    x_1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
-    dot = (y_1 * y_2).sum(dim=1) # unit vectors, also gives cos(theta)
-    dot = torch.clamp(dot, -1.0+1e-8, 1.0-1e-8)
-    c_half = torch.sqrt((1.0 + dot) / 2)
-    s_half = torch.sqrt((1.0 - dot) / 2).reshape((-1, 1))
-    axis = torch.linalg.cross(y_1, y_2)
-    axis = torch.nn.functional.normalize(axis, dim=1)
-    q_12 = torch.zeros_like(q1)
-    q_12[:, 0] = c_half
-    q_12[:, 1:] = axis * s_half
-    where_zero = dot < (-1 + 1e-6)
-    q_12[where_zero, 0] = 0.0
-    q_12[where_zero, 1:] = x_1[where_zero]
+    # Step 1: Determine yaw and shoulder errors, apply those rotations to frame 1 to align end effector axis with target
+    yaw_to_apply = -yaw_error_from_quats(q1, q2, 2)
+    shoulder_to_apply = -shoulder_angle_error_from_quats(q1, q2)
+    yaw_to_apply = quat_from_yaw(yaw_to_apply)
+    q1 = isaac_math_utils.quat_mul(yaw_to_apply, q1)
 
-    x_1_transform = isaac_math_utils.quat_rotate(q_12, x_1)
+    # axis for the shoulder rotation would be the local x-axis rotated by the yaw rotation
+    shoulder_axis = isaac_math_utils.quat_rotate(yaw_to_apply, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    shoulder_to_apply = isaac_math_utils.quat_from_angle_axis(shoulder_to_apply.squeeze(), shoulder_axis)
+    q1 = isaac_math_utils.quat_mul(shoulder_to_apply, q1)
+    
 
     # Step 2: Now that we have rotated the EE x-axis onto the frame where the EE y-axis and goal y-axis are the
     # same, calculate the angular error between them
-    x_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))  
-    dots = (x_1_transform * x_2).sum(dim=1)
+    x_1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    x_2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q2.device).tile((q2.shape[0], 1)))  
+    dots = (x_1 * x_2).sum(dim=1)
     ans = torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8)).reshape(-1, 1)
-    if torch.any(torch.isnan(ans)):
-        mask = torch.isnan(ans).squeeze()
-        print('found nans')
-        print('q_12 where nan:')
-        print(q_12[mask])
-        print('original dot product where nan:')
-        print(dot[mask])
-        print('calculated axis where nan:')
-        print(axis[mask])
-        print('s_half where nan:')
-        print(s_half[mask])
 
     # Step 3: Get the sign of the error by taking cross products of the local x-axes (of the frames where the y-axes are aligned)
     # and use the sign of the resultant product's y-component
-    cross = torch.linalg.cross(x_2, x_1_transform)
-    cross = isaac_math_utils.quat_rotate_inverse(q_12, cross)
+    cross = torch.linalg.cross(x_2, x_1)
+    cross = isaac_math_utils.quat_rotate_inverse(q1, cross)
     sign = torch.sign(cross[:, 1])
     ans[:, 0] *= sign
     return ans
 
+def _aerial_manipulator_angle_errors(
+        q1: torch.Tensor,
+        q2: torch.Tensor,
+        shape_vec: torch.Tensor = None,
+        two_way_yaw: bool = False,
+        eps: float = 1e-8,
+        debug: bool = False
+    ) -> torch.Tensor:
+    """
+    q1: current, q2: desired, shape_vec: desired shape vector, defaults to z-axis, two_way_yaw: whether to consider the case for -b1,
+    eps: small value threshold for considering vectors to be zero
+    """
+    if debug:
+        breakpoint()
+
+    if shape_vec is None:
+        shape_vec = torch.zeros((*q1.shape[:-1], 3), device=q1.device)
+        shape_vec[..., 2] = 1.0
+    else:    
+        shape_vec = shape_vec / (shape_vec.norm(dim=-1, keepdim=True) + 1e-8)
+
+    # Step 1, calculate the yaw error - this will be a yaw about the desired shape vector, instead of projecting the desired/actual
+    # end effector axes onto the xy plane, project it onto the plane normal to the shape vector.
+
+    #Find vector "b2" that is the y-axis of the rotated frame
+    if two_way_yaw:
+        b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, -1.0, 0.0]], device=q1.device).tile((*q1.shape[:-1], 1)))
+    else:
+        b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((*q1.shape[:-1], 1)))
+    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q2.device).tile((*q2.shape[:-1], 1)))
+
+    # shape, b1, b2 all unit vectors shape (..., 3)
+    b1_proj = b1 - (b1 * shape_vec).sum(dim=-1, keepdim=True) * shape_vec # projection of b1 onto the plane normal to the shape vector
+    b2_proj = b2 - (b2 * shape_vec).sum(dim=-1, keepdim=True) * shape_vec # projection of b2 onto the plane normal to the shape vector
+
+    # 2 special cases to consider: if b2_proj is 0, that means b2 is aligned with the shape vector. Any yaw is valid, so we'll set 0 error.
+    # If b1_proj is 0 and b2_proj is not, b1 is aligned with the shape vector, but to be able to perform the calculation, we'll need to project
+    # it another way: we'll rotate it by pi/2 about the cross product of the shape vector and b2_proj.
+    b1_proj_norm = torch.norm(b1_proj, dim=-1, keepdim=True)
+    b2_proj_norm = torch.norm(b2_proj, dim=-1, keepdim=True)
+
+    no_error_mask = b2_proj_norm < eps
+    degen_mask = (b1_proj_norm < eps) & (~no_error_mask)
+
+    if degen_mask.any():
+        degen_mask_vectors = degen_mask.tile(3) # needed since degen_mask is [..., 1]
+        degen_axis = torch.linalg.cross(shape_vec[degen_mask_vectors], b2_proj[degen_mask_vectors])
+        degen_angle = np.pi/2 * torch.ones(*degen_axis.shape[:-1], 1, device=q1.device)
+        quat_to_apply = isaac_math_utils.quat_from_angle_axis(degen_angle, degen_axis)
+        b1_proj[degen_mask_vectors] = isaac_math_utils.quat_rotate(quat_to_apply, b1_proj[degen_mask_vectors])
+        b1_proj_norm = torch.norm(b1_proj, dim=-1, keepdim=True) # recalculate, degenerate cases should be 1 anyway
+
+
+    dot = (b1_proj*b2_proj).sum(dim=-1, keepdim=True)
+    yaw_error = torch.ones_like(dot)
+    prod = b1_proj_norm * b2_proj_norm
+    yaw_error[(~no_error_mask).squeeze(-1)] = dot[(~no_error_mask).squeeze(-1)] / prod[(~no_error_mask).squeeze(-1)]
+    yaw_error = torch.arccos(torch.clamp(yaw_error, -1.0+1e-8, 1.0-1e-8)).view(q1.shape[:-1])
+
+
+    cross = torch.linalg.cross(b2_proj, b1_proj)
+    # for sign error, rotate the shape vector onto z axis and get sign from z-component of the cross product
+    shape_vec_rot_axis = torch.linalg.cross(shape_vec, torch.tensor([[0.0, 0.0, 1.0]], device=q1.device).tile((*q1.shape[:-1], 1)))
+    shape_vec_rot_angle = torch.arccos(
+        torch.clamp((shape_vec * shape_vec_rot_axis).sum(dim=-1, keepdim=True), -1.0+1e-8, 1.0-1e-8)
+    ).squeeze(-1)
+    shape_vec_rot_to_apply = isaac_math_utils.quat_from_angle_axis(shape_vec_rot_angle, shape_vec_rot_axis)
+    cross = isaac_math_utils.quat_rotate(shape_vec_rot_to_apply, cross)
+    sign = torch.sign(cross[..., 2]) # z-component of the cross product determins the sign of the error
+    yaw_error *= sign
+    # yaw_error[mask] *= -1.0 # sign swap for the masked cases
+
+    # Step 2, calculate the shoulder error by appling the yaw rotation to q1 and calculating error as a dot product
+    yaw_to_apply = quat_from_yaw(-yaw_error) # negative sign since the convention we are following for the angle errors is actual - desired
+    q1 = isaac_math_utils.quat_mul(yaw_to_apply, q1)
+
+    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((*q1.shape[:-1], 1)))
+    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q2.device).tile((*q2.shape[:-1], 1)))
+    dot = (b1*b2).sum(dim=-1)
+    shoulder_error = torch.arccos(torch.clamp(dot, -1.0+1e-8, 1.0-1e-8)).view(q1.shape[:-1])
+    cross = torch.linalg.cross(b2, b1) # result of cross product will be aligned with the forward axis of the quadrotor, get sign by looking at x-component
+    cross = isaac_math_utils.quat_rotate_inverse(yaw_to_apply, cross)
+    sign = torch.sign(cross[..., 0])
+    shoulder_error *= sign
+
+    # Step 3, calculate the wrist error by appling the yaw and shoulder rotations to q1 and calculating error as a dot product
+
+    # Axis for the shoulder rotation would be the quadrotor's forward axis rotated by the yaw rotation
+    shoulder_axis = isaac_math_utils.quat_rotate(yaw_to_apply, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((*q1.shape[:-1], 1)))
+    shoulder_to_apply = isaac_math_utils.quat_from_angle_axis(-shoulder_error, shoulder_axis)
+    q1 = isaac_math_utils.quat_mul(shoulder_to_apply, q1)
+    
+
+    # Now that we have rotated the EE x-axis onto the frame where the EE y-axis and goal y-axis are the
+    # same, calculate the angular error between them
+    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[1.0, 0.0, 0.0]], device=q1.device).tile((*q1.shape[:-1], 1)))
+    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[1.0, 0.0, 0.0]], device=q2.device).tile((*q2.shape[:-1], 1)))  
+    dots = (b1 * b2).sum(dim=-1)
+    wrist_error = torch.arccos(torch.clamp(dots, -1+1e-8, 1-1e-8)).view(q1.shape[:-1])
+
+    # Get the sign of the error by taking cross products of the local x-axes (of the frames where the y-axes are aligned)
+    # and use the sign of the resultant product's y-component
+    cross = torch.linalg.cross(b2, b1)
+    cross = isaac_math_utils.quat_rotate_inverse(q1, cross)
+    sign = torch.sign(cross[..., 1])
+    wrist_error *= sign
+    return yaw_error[..., None], shoulder_error[..., None], wrist_error[..., None] # each is (..., 1)
+
+def aerial_manipulator_angle_errors(
+    q1: torch.Tensor,
+    q2: torch.Tensor,
+    shape_vec: torch.Tensor = None,
+    eps: float = 1e-8
+) -> torch.Tensor:
+    '''
+    Calculates the yaw, shoulder, and wrist angle errors for the aerial manipulator in the 2DOF case in the (actual - desired) convention
+
+    Args:
+        q1: current EE rotation, (..., 4)
+        q2: target EE rotation (..., 4)
+
+    Returns the signed error of the each angle in radians
+    '''
+
+    sol1 = torch.cat(_aerial_manipulator_angle_errors(q1, q2, shape_vec, True, eps), dim=-1)
+    sol2 = torch.cat(_aerial_manipulator_angle_errors(q1, q2, shape_vec, False, eps), dim=-1)
+
+    sol = torch.zeros_like(sol1)
+    sol1_norm = torch.norm(sol1, dim=-1)
+    sol2_norm = torch.norm(sol2, dim=-1)
+    sol[sol1_norm < sol2_norm] = sol1[sol1_norm < sol2_norm]
+    sol[sol1_norm >= sol2_norm] = sol2[sol1_norm >= sol2_norm]
+    return sol[..., :1], sol[..., 1:2], sol[..., 2:3]
+
+def aerial_manipulator_angle_solns_2dof(
+    initial_ee_ori: torch.Tensor,
+    target_ee_ori: torch.Tensor,
+    last_yaw: torch.Tensor,
+    shape_vec: torch.Tensor = None,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    '''
+    Args:
+        initial_ee_ori: initial EE rotation, (..., 4)
+        target_ee_ori: target EE rotation (..., 4)
+        last_yaw: last yaw angle command (..., 1), used to get a continuous trajectory of yaw commands
+        shape_vec: desired shape vector, (..., 3)
+        eps: small value threshold for considering vectors to be zero
+    '''
+    sol1 = -torch.cat(_aerial_manipulator_angle_errors(initial_ee_ori, target_ee_ori, shape_vec, True, eps), dim=-1)
+    sol2 = -torch.cat(_aerial_manipulator_angle_errors(initial_ee_ori, target_ee_ori, shape_vec, False, eps), dim=-1)
+
+    delta_1 = isaac_math_utils.wrap_to_pi(sol1[..., :1] - last_yaw)
+    delta_2 = isaac_math_utils.wrap_to_pi(sol2[..., :1] - last_yaw)
+
+    sol = torch.zeros_like(sol1)
+    sol[torch.norm(delta_1, dim=-1) < torch.norm(delta_2, dim=-1)] = sol1[torch.norm(delta_1, dim=-1) < torch.norm(delta_2, dim=-1)]
+    sol[torch.norm(delta_1, dim=-1) >= torch.norm(delta_2, dim=-1)] = sol2[torch.norm(delta_1, dim=-1) >= torch.norm(delta_2, dim=-1)]
+    return sol[..., :1], sol[..., 1:2], sol[..., 2:3]
 
 def calculate_required_yaw(q: torch.Tensor, yaw: torch.Tensor, env_ids: torch.Tensor) -> torch.Tensor:
     '''

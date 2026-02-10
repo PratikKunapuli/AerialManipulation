@@ -124,7 +124,7 @@ def H1_dot(psi: torch.Tensor, psi_dot: torch.Tensor) -> torch.Tensor:
     ), dim=-2)
 
     # H1_dot
-    return dH1_dpsi * psi_dot.unsqueeze(-1).unsqueeze(-1)
+    return (dH1_dpsi * psi_dot.unsqueeze(-1).unsqueeze(-1)).view(-1, 3, 3)
 
 
 @torch.jit.script
