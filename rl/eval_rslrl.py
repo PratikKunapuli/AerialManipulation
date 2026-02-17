@@ -1,6 +1,6 @@
 import argparse
 import sys 
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 from matplotlib import pyplot as plt
 # local imports
 from utils import cli_args  # isort: skip
@@ -61,19 +61,19 @@ from controllers.gc_params import gc_params_dict
 
 from rsl_rl.runners import OnPolicyRunner
 
-from omni.isaac.lab.utils.dict import print_dict
+from isaaclab.utils.dict import print_dict
 
-import omni.isaac.lab_tasks  # noqa: F401
-from omni.isaac.lab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
-from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
-from omni.isaac.lab_tasks.utils import get_checkpoint_path, parse_env_cfg
-from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import (
+import isaaclab_tasks  # noqa: F401
+from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
+from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_tasks.utils import get_checkpoint_path, parse_env_cfg
+from isaaclab_rl.rsl_rl import (
     RslRlOnPolicyRunnerCfg,
     RslRlVecEnvWrapper,
     export_policy_as_jit,
     export_policy_as_onnx,
 )
-from omni.isaac.lab.utils.io import load_yaml
+from isaaclab.utils.io import load_yaml
 
 import numpy as np
 import torch
@@ -424,10 +424,10 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
         # print("Total params: ", actor_params + critic_params)
         # input()
 
-        export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
-        export_policy_as_jit(
-            ppo_runner.alg.policy, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt"
-        )
+        # export_model_dir = os.path.join(os.path.dirname(resume_path), "exported")
+        # export_policy_as_jit(
+        #     ppo_runner.alg.policy, ppo_runner.obs_normalizer, path=export_model_dir, filename="policy.pt"
+        # )
         
     
     if args_cli.baseline:
@@ -435,8 +435,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
         obs = obs_dict["policy"]
     else:
         # obs, dict_obs = envs.reset()
-        obs, dict_obs = envs.get_observations()
-        obs_dict = dict_obs['observations']
+        obs_dict = envs.get_observations()
+        # obs, dict_obs = envs.get_observations()
+        # obs_dict = dict_obs['observations']
 
     print("Starting obs: ", obs_dict["full_state"])
 
@@ -469,17 +470,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                     action = agent.get_action(obs_dict["gc"])
                     # print("Obs: ", obs_dict["gc"][args_cli.follow_robot])
                 else:
-                    actions = agent(obs_tensor)
+                    actions = agent(obs_dict)
                 times.append(time.time() - start)
 
                 if args_cli.baseline:
                     obs_dict, reward, terminated, truncated, info = envs.step(action)
                     done_count += terminated.sum().item() + truncated.sum().item()
                 else:
-                    obs, reward, dones, extras = envs.step(actions)
+                    obs_dict, reward, dones, extras = envs.step(actions)
                     # print("Reward: ", reward)
                     done_count += dones.sum().item()
-                    obs_dict = extras["observations"]
+                    # obs_dict = extras["observations"]
                     info = extras
                 rewards[:, steps] = reward.detach()
 

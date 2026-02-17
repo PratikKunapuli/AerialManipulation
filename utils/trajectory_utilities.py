@@ -1,5 +1,5 @@
 import torch
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 from typing import Tuple
 
 

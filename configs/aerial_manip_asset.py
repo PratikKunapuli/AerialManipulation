@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.actuators import ImplicitActuatorCfg, IdealPDActuatorCfg
-from omni.isaac.lab.assets import ArticulationCfg, RigidObjectCfg
+import isaaclab.sim as sim_utils
+from isaaclab.actuators import ImplicitActuatorCfg, IdealPDActuatorCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from utils.assets import MODELS_PATH
 
-from omni.isaac.lab.sim.spawners.shapes import SphereCfg, spawn_sphere
-from omni.isaac.lab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg
+from isaaclab.sim.spawners.shapes import SphereCfg, spawn_sphere
+from isaaclab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg
 
 
 AERIAL_MANIPULATOR_CFG = ArticulationCfg(

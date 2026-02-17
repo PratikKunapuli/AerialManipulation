@@ -1,6 +1,6 @@
 import argparse
 import sys
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 from utils import cli_args
 
 # add argparse arguments
@@ -53,7 +53,7 @@ import gymnasium as gym
 import envs
 from policies import Agent
 
-from omni.isaac.lab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
+from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from omni.isaac.lab_tasks.utils import parse_env_cfg
 from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
 

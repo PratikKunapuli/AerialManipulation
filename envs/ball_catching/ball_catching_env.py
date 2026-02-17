@@ -3,22 +3,22 @@ from __future__ import annotations
 import torch
 
 # Isaac SDK imports
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
-from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
-from omni.isaac.lab.envs.ui import BaseEnvWindow
-from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from omni.isaac.lab.scene import InteractiveSceneCfg
-from omni.isaac.lab.sim import SimulationCfg
-from omni.isaac.lab.terrains import TerrainImporterCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.math import subtract_frame_transforms, combine_frame_transforms, matrix_from_quat, quat_error_magnitude, random_orientation, quat_inv, quat_rotate_inverse, quat_mul, yaw_quat, quat_conjugate
-from omni.isaac.lab_assets import CRAZYFLIE_CFG
-from omni.isaac.lab.sim.spawners.shapes import SphereCfg, spawn_sphere
-from omni.isaac.lab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg, spawn_preview_surface
+import isaaclab.sim as sim_utils
+from isaaclab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.envs.ui import BaseEnvWindow
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sim import SimulationCfg
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.utils import configclass
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.utils.math import subtract_frame_transforms, combine_frame_transforms, matrix_from_quat, quat_error_magnitude, random_orientation, quat_inv, quat_apply_inverse, quat_mul, yaw_quat, quat_conjugate
+from isaaclab_assets import CRAZYFLIE_CFG
+from isaaclab.sim.spawners.shapes import SphereCfg, spawn_sphere
+from isaaclab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg, spawn_preview_surface
 
-from omni.isaac.core.utils.prims import get_prim_at_path
+from isaaclab.sim.utils import get_prim_at_path
 from pxr import Usd, UsdShade, Gf
 # Local imports
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_0DOF_DEBUG_BALL_CATCHING_CFG, AERIAL_MANIPULATOR_0DOF_BALL_CATCHING_CFG, BALL_CFG
@@ -63,7 +63,7 @@ class AerialManipulatorBallCatchingEnvBaseCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / sim_rate_hz,
         render_interval=1,
-        disable_contact_processing=True,
+        #disable_contact_processing=True,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -461,14 +461,14 @@ class AerialManipulatorBallCatchingEnv(DirectRLEnv):
             ori_representation_b = torch.zeros(self.num_envs, 0, device=self.device)
 
         if self.cfg.use_grav_vector:
-            grav_vector_b = quat_rotate_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
+            grav_vector_b = quat_apply_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
         else:
             grav_vector_b = torch.zeros(self.num_envs, 0, device=self.device)
         
         # Compute the linear and angular velocities of the end-effector in body frame
         lin_vel_error_w = -lin_vel_w
-        lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_error_w)
-        ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_w)
+        lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_error_w)
+        ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_w)
 
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
@@ -575,8 +575,8 @@ class AerialManipulatorBallCatchingEnv(DirectRLEnv):
         yaw_error = yaw_error * (1.0 - torch.exp(-1.0/(self.cfg.yaw_smooth_transition_scale*pos_error)))
 
         # Velocity error components, used for stabliization tuning
-        lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_w)
-        ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_w)
+        lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_w)
+        ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_w)
         # lin_vel_error = torch.linalg.norm(lin_vel_b, dim=-1)
         # ang_vel_error = torch.linalg.norm(ang_vel_b, dim=-1)
         # lin_vel_error = torch.sum(torch.square(lin_vel_b), dim=1)

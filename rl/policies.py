@@ -3,7 +3,7 @@ import torch.nn as nn
 from torch.distributions.normal import Normal
 import numpy as np
 
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 from utils.math_utilities import vee_map, yaw_from_quat, quat_from_yaw
 
 def layer_init(layer, std=np.sqrt(2), bias_const=0.0):

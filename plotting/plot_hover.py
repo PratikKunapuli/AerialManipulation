@@ -13,7 +13,7 @@ from matplotlib.markers import MarkerStyle
 from matplotlib.lines import Line2D
 from matplotlib.patches import Patch
 
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 import utils.math_utilities as math_utils
 
 

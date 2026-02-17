@@ -4,20 +4,20 @@ from dataclasses import dataclass
 import torch
 
 # Isaac SDK imports
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation, ArticulationCfg
-from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
-from omni.isaac.lab.envs.ui import BaseEnvWindow
-from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from omni.isaac.lab.scene import InteractiveSceneCfg
-from omni.isaac.lab.sim import SimulationCfg
-from omni.isaac.lab.terrains import TerrainImporterCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.math import (subtract_frame_transforms, combine_frame_transforms, matrix_from_quat, quat_error_magnitude, 
-                                        random_orientation, quat_inv, quat_rotate_inverse, quat_mul, yaw_quat, quat_conjugate,
-                                        quat_rotate, normalize, wrap_to_pi, euler_xyz_from_quat, matrix_from_euler, quat_from_euler_xyz)
-from omni.isaac.lab_assets import CRAZYFLIE_CFG
+import isaaclab.sim as sim_utils
+from isaaclab.assets import Articulation, ArticulationCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.envs.ui import BaseEnvWindow
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sim import SimulationCfg
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.utils import configclass
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.utils.math import (subtract_frame_transforms, combine_frame_transforms, matrix_from_quat, quat_error_magnitude, 
+                                        random_orientation, quat_inv, quat_apply_inverse, quat_mul, yaw_quat, quat_conjugate,
+                                        quat_apply, normalize, wrap_to_pi, euler_xyz_from_quat, matrix_from_euler, quat_from_euler_xyz)
+from isaaclab_assets import CRAZYFLIE_CFG
 import gymnasium as gym
 import numpy as np
 
@@ -61,7 +61,7 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / sim_rate_hz,
         render_interval=1,
-        disable_contact_processing=True,
+        #disable_contact_processing=True,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -588,17 +588,17 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         yaw_error, shoulder_error, wrist_error = aerial_manipulator_angle_errors(base_ori_w, goal_ori_w)
 
         # Compute the linear and angular velocities of the end-effector in body frame
-        lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_w)
-        ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_w)
+        lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_w)
+        ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_w)
 
         # Do the same for the body frame
-        body_lin_vel_b = quat_rotate_inverse(body_ori_w, body_lin_vel_w)
-        body_ang_vel_b = quat_rotate_inverse(body_ori_w, body_ang_vel_w)
+        body_lin_vel_b = quat_apply_inverse(body_ori_w, body_lin_vel_w)
+        body_ang_vel_b = quat_apply_inverse(body_ori_w, body_ang_vel_w)
 
         if self.cfg.use_grav_vector:
              # Also use grav vector in the body frame
-            grav_vector_b_body = quat_rotate_inverse(body_ori_w, self._grav_vector_unit)
-            grav_vector_b = quat_rotate_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
+            grav_vector_b_body = quat_apply_inverse(body_ori_w, self._grav_vector_unit)
+            grav_vector_b = quat_apply_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
         else:
             grav_vector_b = torch.zeros(self.num_envs, 0, device=self.device)
             grav_vector_b_body = torch.zeros(self.num_envs, 0, device=self.device)
@@ -795,8 +795,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         # Axis reward as dot product of goal axis and current axis
         axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).tile((self.num_envs, 1))
-        goal_axis = quat_rotate(goal_ori_w, axis)
-        current_axis = quat_rotate(base_ori_w, axis)
+        goal_axis = quat_apply(goal_ori_w, axis)
+        current_axis = quat_apply(base_ori_w, axis)
         axis_reward = (goal_axis * current_axis).sum(dim=1)
         # Get alignment error as angle between goal axis and current axis
         axis_error = torch.acos(axis_reward.clamp(-1.0+1e-8, 1.0-1e-8))
@@ -878,8 +878,8 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         combined_distance = combined_reward
 
         # Velocity error components, used for stabliization tuning
-        lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_w)
-        ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_w)
+        lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_w)
+        ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_w)
         # lin_vel_error = torch.linalg.norm(lin_vel_b, dim=-1)
         # ang_vel_error = torch.linalg.norm(ang_vel_b, dim=-1)
         # lin_vel_error = torch.sum(torch.square(lin_vel_b), dim=1)
@@ -1150,7 +1150,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
     
     def compute_desired_pose_from_transform(self, goal_pos_w, goal_ori_w, pos_transform):
         # Find b2 in the ori frame, set z component to 0 and the desired yaw is the atan2 of the x and y components
-        b2 = quat_rotate(goal_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=goal_ori_w.device).tile(goal_ori_w.shape[0], 1))
+        b2 = quat_apply(goal_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=goal_ori_w.device).tile(goal_ori_w.shape[0], 1))
         if self.cfg.num_joints == 0:
             b2[:, 2] = 0.0
         b2 = normalize(b2)

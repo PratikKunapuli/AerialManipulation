@@ -1,6 +1,6 @@
 import torch 
 from typing import Tuple
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 
 @torch.jit.script
 def s2_projection(X: torch.Tensor, Y: torch.Tensor) -> torch.Tensor:

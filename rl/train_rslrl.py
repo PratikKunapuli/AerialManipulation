@@ -10,12 +10,11 @@
 import argparse
 import sys
 
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 # local imports
 # import cli_args  # isort: skip
 from utils import cli_args  # isort: skip
-
 
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RSL-RL.")
@@ -55,14 +54,14 @@ import envs
 
 from rsl_rl.runners import OnPolicyRunner
 
-from omni.isaac.lab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
-from omni.isaac.lab.utils.dict import print_dict, class_to_dict
-from omni.isaac.lab.utils.io import dump_pickle, dump_yaml
+from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
+from isaaclab.utils.dict import print_dict, class_to_dict
+from isaaclab.utils.io import dump_yaml
 
-import omni.isaac.lab_tasks  # noqa: F401
-from omni.isaac.lab_tasks.utils import get_checkpoint_path
-from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
-from omni.isaac.lab_tasks.utils.wrappers.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
+import isaaclab_tasks  # noqa: F401
+from isaaclab_tasks.utils import get_checkpoint_path
+from isaaclab_tasks.utils.hydra import hydra_task_config
+from isaaclab_rl.rsl_rl import RslRlOnPolicyRunnerCfg, RslRlVecEnvWrapper
 
 torch.backends.cuda.matmul.allow_tf32 = True
 torch.backends.cudnn.allow_tf32 = True
@@ -155,8 +154,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_dir, "params", "agent.yaml"), agent_cfg)
-    # dump_pickle(os.path.join(log_dir, "params", "env.pkl"), env_cfg)
-    # dump_pickle(os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
+    #  (os.path.join(log_dir, "params", "env.pkl"), env_cfg)
+    #  (os.path.join(log_dir, "params", "agent.pkl"), agent_cfg)
     
     # custom_yaml_dump(env_cfg.to_dict(), os.path.join(log_dir, "params", "env.yaml"))
     # custom_yaml_dump(agent_cfg.to_dict(), os.path.join(log_dir, "params", "agent.yaml"))

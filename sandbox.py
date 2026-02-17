@@ -4,7 +4,7 @@ import utils.math_utilities as math_utils
 import utils.trajectory_utilities as traj_utils
 import matplotlib.pyplot as plt
 import time
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 
 
 def check_traj_gen():
@@ -370,7 +370,7 @@ def investigate_lissajous_vs_circle():
         ee_pos = data[:, :-1, 13:16].detach().cpu()
         ee_ori = (data[:, :-1, 16:20]).detach().cpu()
         ee_yaw = math_utils.yaw_from_quat(ee_ori)
-        traj_vel_b = isaac_math_utils.quat_rotate_inverse(ee_ori[:,:], traj_vel)
+        traj_vel_b = isaac_math_utils.quat_apply_inverse(ee_ori[:,:], traj_vel)
         pos_error = torch.norm(ee_pos - traj_pos, dim=-1)
         ori_error = torch.abs(isaac_math_utils.wrap_to_pi(ee_yaw - traj_yaw))
 
@@ -384,7 +384,7 @@ def investigate_lissajous_vs_circle():
     # gc_lissajous_ee_pos = gc_lissajous_data[:, :-1, 13:16].detach().cpu()
     # gc_lissajous_ee_ori = (gc_lissajous_data[:, :-1, 16:20]).detach().cpu()
     # gc_lissajous_ee_yaw = math_utils.yaw_from_quat(gc_lissajous_ee_ori)
-    # gc_lissajous_traj_vel_b = isaac_math_utils.quat_rotate_inverse(gc_lissajous_ee_ori[:,:], gc_lissajous_traj_vel)
+    # gc_lissajous_traj_vel_b = isaac_math_utils.quat_apply_inverse(gc_lissajous_ee_ori[:,:], gc_lissajous_traj_vel)
     # gc_lissajous_pos_error = torch.norm(gc_lissajous_ee_pos - gc_lissajous_traj_pos, dim=-1)
     # gc_lissajous_ori_error = torch.abs(isaac_math_utils.wrap_to_pi(gc_lissajous_ee_yaw - gc_lissajous_traj_yaw))
 
@@ -1051,18 +1051,18 @@ def check_circle_trajs():
 
     # Rotate vel and acc in to body frame
     lissajous_ee_ori = math_utils.quat_from_yaw(lissajous_yaw_all)
-    lissajous_vel_all_b = isaac_math_utils.quat_rotate_inverse(lissajous_ee_ori, lissajous_vel_all)
-    lissajous_acc_all_b = isaac_math_utils.quat_rotate_inverse(lissajous_ee_ori, lissajous_acc_all)
+    lissajous_vel_all_b = isaac_math_utils.quat_apply_inverse(lissajous_ee_ori, lissajous_vel_all)
+    lissajous_acc_all_b = isaac_math_utils.quat_apply_inverse(lissajous_ee_ori, lissajous_acc_all)
 
     circle_slow_ee_ori = math_utils.quat_from_yaw(slow_yaw)
     circle_tangent_ee_ori = math_utils.quat_from_yaw(tangent_yaw)
     circle_fast_ee_ori = math_utils.quat_from_yaw(fast_yaw)
-    circle_slow_vel_b = isaac_math_utils.quat_rotate_inverse(circle_slow_ee_ori, slow_vel)
-    circle_slow_acc_b = isaac_math_utils.quat_rotate_inverse(circle_slow_ee_ori, slow_acc)
-    circle_tangent_vel_b = isaac_math_utils.quat_rotate_inverse(circle_tangent_ee_ori, tangent_vel)
-    circle_tangent_acc_b = isaac_math_utils.quat_rotate_inverse(circle_tangent_ee_ori, tangent_acc)
-    circle_fast_vel_b = isaac_math_utils.quat_rotate_inverse(circle_fast_ee_ori, fast_vel)
-    circle_fast_acc_b = isaac_math_utils.quat_rotate_inverse(circle_fast_ee_ori, fast_acc)
+    circle_slow_vel_b = isaac_math_utils.quat_apply_inverse(circle_slow_ee_ori, slow_vel)
+    circle_slow_acc_b = isaac_math_utils.quat_apply_inverse(circle_slow_ee_ori, slow_acc)
+    circle_tangent_vel_b = isaac_math_utils.quat_apply_inverse(circle_tangent_ee_ori, tangent_vel)
+    circle_tangent_acc_b = isaac_math_utils.quat_apply_inverse(circle_tangent_ee_ori, tangent_acc)
+    circle_fast_vel_b = isaac_math_utils.quat_apply_inverse(circle_fast_ee_ori, fast_vel)
+    circle_fast_acc_b = isaac_math_utils.quat_apply_inverse(circle_fast_ee_ori, fast_acc)
 
     avg_lissajous_vel_norm_all_b = torch.mean(isaac_math_utils.normalize(lissajous_vel_all_b), dim=1)
     avg_lissajous_acc_norm_all_b = torch.mean(isaac_math_utils.normalize(lissajous_acc_all_b), dim=1)

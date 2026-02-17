@@ -3,25 +3,25 @@ from __future__ import annotations
 import torch
 
 # Isaac SDK imports
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
-from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
-from omni.isaac.lab.envs.ui import BaseEnvWindow
-from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from omni.isaac.lab.scene import InteractiveSceneCfg
-from omni.isaac.lab.sim import SimulationCfg
-from omni.isaac.lab.terrains import TerrainImporterCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
-from omni.isaac.lab.utils.math import (
+import isaaclab.sim as sim_utils
+from isaaclab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.envs.ui import BaseEnvWindow
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sim import SimulationCfg
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.utils import configclass
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+from isaaclab.utils.math import (
     subtract_frame_transforms, 
     combine_frame_transforms,
     matrix_from_quat,
     quat_error_magnitude,
     random_orientation,
     quat_inv,
-    quat_rotate,
-    quat_rotate_inverse,
+    quat_apply,
+    quat_apply_inverse,
     quat_mul,
     yaw_quat,
     quat_conjugate,
@@ -30,11 +30,11 @@ from omni.isaac.lab.utils.math import (
     matrix_from_euler,
     wrap_to_pi,
 )
-from omni.isaac.lab_assets import CRAZYFLIE_CFG
-from omni.isaac.lab.sim.spawners.shapes import SphereCfg, spawn_sphere
-from omni.isaac.lab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg, spawn_preview_surface
+from isaaclab_assets import CRAZYFLIE_CFG
+from isaaclab.sim.spawners.shapes import SphereCfg, spawn_sphere
+from isaaclab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg, spawn_preview_surface
 
-from omni.isaac.core.utils.prims import get_prim_at_path
+# from isaaclab.sim.utils import get_prim_at_path
 from pxr import Usd, UsdShade, Gf
 # Local imports
 import gymnasium as gym
@@ -93,7 +93,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / sim_rate_hz,
         render_interval=1,
-        disable_contact_processing=True,
+        #disable_contact_processing=True,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -974,7 +974,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             body_ori_representation = body_ori_w
 
         if self.cfg.use_grav_vector:
-            grav_vector_b = quat_rotate_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
+            grav_vector_b = quat_apply_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
         else:
             grav_vector_b = torch.zeros(self.num_envs, 0, device=self.device)
         
@@ -987,7 +987,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             lin_vel_error_w = lin_vel_w
             body_lin_vel_w = body_lin_vel_w
 
-        lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_error_w)
+        lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_error_w)
         if self.cfg.use_ang_vel_from_trajectory and self.cfg.trajectory_horizon > 0 and not self.cfg.gc_mode:
             ang_vel_des = torch.zeros_like(ang_vel_w)
             ang_vel_des[:, 0] = self._roll_traj[1, :, 0]
@@ -998,11 +998,19 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         else:
             ang_vel_error_w = ang_vel_w
             body_ang_vel_w = body_ang_vel_w
-        ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_error_w)
+        ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_error_w)
+
+        # Component of the desired angular velocity vector about the shoulder actuation axis (quadrotor forward axis)
+        axis = quat_apply(body_ori_w, torch.tensor([[1.0, 0.0, 0.0]], device=body_ori_w.device).tile((body_ori_w.shape[0], 1)))
+        ang_vel_des_shoulder = (ang_vel_b * axis).sum(dim=-1, keepdim=True)
+
+        # Component of the desired angular velocity vector about the wrist actuation axis (end effector y-axis)
+        axis = quat_apply(base_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=base_ori_w.device).tile((base_ori_w.shape[0], 1)))
+        ang_vel_des_wrist = (ang_vel_b * axis).sum(dim=-1, keepdim=True)
 
         # Do the same for the body frame
-        body_lin_vel_b = quat_rotate_inverse(body_ori_w, body_lin_vel_w)
-        body_ang_vel_b = quat_rotate_inverse(body_ori_w, body_ang_vel_w)
+        body_lin_vel_b = quat_apply_inverse(body_ori_w, body_lin_vel_w)
+        body_ang_vel_b = quat_apply_inverse(body_ori_w, body_ang_vel_w)
 
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
@@ -1244,8 +1252,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # Axis reward as dot product of goal axis and current axis
         axis = torch.tensor([0.0, 1.0, 0.0], device=self.device).tile((self.num_envs, 1))
-        goal_axis = quat_rotate(goal_ori_w, axis)
-        current_axis = quat_rotate(base_ori_w, axis)
+        goal_axis = quat_apply(goal_ori_w, axis)
+        current_axis = quat_apply(base_ori_w, axis)
         axis_reward = (goal_axis * current_axis).sum(dim=1)
 
         # More detailed joint error components
@@ -1267,7 +1275,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             lin_vel_error_w = self._pos_traj[1, :, :, 0] - lin_vel_w
         else:
             lin_vel_error_w = torch.zeros_like(lin_vel_w, device=self.device) - lin_vel_w
-        lin_vel_b = quat_rotate_inverse(base_ori_w, lin_vel_error_w)
+        lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_error_w)
         if self.cfg.use_ang_vel_from_trajectory and self.cfg.trajectory_horizon > 0:
             ang_vel_des = torch.zeros_like(ang_vel_w)
             ang_vel_des[:, 0] = self._roll_traj[1, :, 0]
@@ -1276,7 +1284,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             ang_vel_error_w = ang_vel_des - ang_vel_w
         else:
             ang_vel_error_w = torch.zeros_like(ang_vel_w) - ang_vel_w
-        ang_vel_b = quat_rotate_inverse(base_ori_w, ang_vel_error_w)
+        ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_error_w)
         # lin_vel_error = torch.linalg.norm(lin_vel_b, dim=-1)
         # ang_vel_error = torch.linalg.norm(ang_vel_b, dim=-1)
         # lin_vel_error = torch.sum(torch.square(lin_vel_b), dim=1)

@@ -1,7 +1,7 @@
 import torch
 
 import utils.math_utilities as math_utils
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 
 # Description: Parameters for plotting
 params = {
@@ -27,7 +27,7 @@ def get_quantiles_error(data, quantiles):
     T = data.shape[1]-1
 
     pos_error = torch.norm(data[:, :T, params["goal_pos_slice"]] - data[:, :T, params["ee_pos_slice"]], dim=-1)
-    yaw_error = math_utils.yaw_error_from_quats(data[:,:T,params["goal_ori_slice"]], data[:,:T,params["ee_ori_slice"]], 0)
+    yaw_error = isaac_math_utils.quat_error_magnitude(data[:,:T,params["goal_ori_slice"]], data[:,:T,params["ee_ori_slice"]])
 
     pos_quantiles = torch.quantile(pos_error, torch.tensor(quantiles, device=data.device), dim=0).cpu()
     yaw_quantiles = torch.quantile(yaw_error, torch.tensor(quantiles, device=data.device), dim=0).cpu()
@@ -48,7 +48,7 @@ def get_errors(data):
     T = data.shape[1]-1
 
     pos_error = torch.norm(data[:, :T, params["goal_pos_slice"]] - data[:, :T, params["ee_pos_slice"]], dim=-1)
-    yaw_error = math_utils.yaw_error_from_quats(data[:,:T,params["goal_ori_slice"]], data[:,:T,params["ee_ori_slice"]], 0)
+    yaw_error = isaac_math_utils.quat_error_magnitude(data[:,:T,params["goal_ori_slice"]], data[:,:T,params["ee_ori_slice"]])
 
     return pos_error, yaw_error
 

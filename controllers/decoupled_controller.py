@@ -5,7 +5,7 @@ import numpy as np
 import pinocchio as pin
 from scipy.linalg import null_space
 
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 from utils.math_utilities import vee_map, yaw_from_quat, quat_from_yaw, matrix_log
 import utils.flatness_utilities as flat_utils
 import utils.math_utilities as math_utils
@@ -24,7 +24,7 @@ def compute_2d_rotation_matrix(thetas: torch.tensor):
         
 def compute_desired_pose_0dof(goal_pos_w, goal_ori_w, pos_transform, ori_transform):
     # Find b2 in the ori frame, set z component to 0 and the desired yaw is the atan2 of the x and y components
-    b2 = isaac_math_utils.quat_rotate(goal_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=goal_ori_w.device).tile(goal_ori_w.shape[0], 1))
+    b2 = isaac_math_utils.quat_apply(goal_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=goal_ori_w.device).tile(goal_ori_w.shape[0], 1))
     b2[:, 2] = 0.0
     b2 = isaac_math_utils.normalize(b2)
      
@@ -70,7 +70,7 @@ def compute_desired_pose_1dof(goal_pos_w, goal_ori_w, pos_transform):
 @torch.jit.script
 def get_point_state_from_ee_transform_w(ee_pos_w, ee_ori_quat_w, ee_vel_w, ee_omega_w, point_pos_ee_frame):
     point_pos_w, _ = isaac_math_utils.combine_frame_transforms(ee_pos_w, ee_ori_quat_w, point_pos_ee_frame)
-    point_vel_w = ee_vel_w + torch.cross(ee_omega_w, isaac_math_utils.quat_rotate(ee_ori_quat_w, point_pos_ee_frame), dim=1)
+    point_vel_w = ee_vel_w + torch.cross(ee_omega_w, isaac_math_utils.quat_apply(ee_ori_quat_w, point_pos_ee_frame), dim=1)
     
     return point_pos_w, point_vel_w
 
@@ -250,8 +250,8 @@ class DecoupledController():
             vehicle_com_offset_local_frame = torch.tensor([0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
             arm_com_offset_local_frame = torch.tensor([0.0, 0.0, 0.0], device=self.device).unsqueeze(0)
             self.com_pos_w = torch.zeros(1, 3, device=self.device)
-            self.com_pos_w += self.vehicle_mass * (quad_pos_w + isaac_math_utils.quat_rotate(quad_ori_quat_w, vehicle_com_offset_local_frame))
-            self.com_pos_w += self.arm_mass * (ee_pos_w + isaac_math_utils.quat_rotate(ee_ori_quat_w, arm_com_offset_local_frame))
+            self.com_pos_w += self.vehicle_mass * (quad_pos_w + isaac_math_utils.quat_apply(quad_ori_quat_w, vehicle_com_offset_local_frame))
+            self.com_pos_w += self.arm_mass * (ee_pos_w + isaac_math_utils.quat_apply(ee_ori_quat_w, arm_com_offset_local_frame))
             self.com_pos_w /= self.mass
             self.com_pos_ee_frame, self.com_ori_ee_frame = isaac_math_utils.subtract_frame_transforms(ee_pos_w, ee_ori_quat_w, self.com_pos_w, quad_ori_quat_w)
             self.com_pos_v_frame, _ = isaac_math_utils.subtract_frame_transforms(self.quad_pos_ee_frame, self.quad_ori_ee_frame, self.com_pos_ee_frame)
@@ -436,7 +436,7 @@ class DecoupledController():
             self.pos_buffer.append(com_pos)
 
             # print("Input and Traj close: ", torch.allclose(input_des_pos, desired_pos, atol=1e-5))
-            quad_omega = isaac_math_utils.quat_rotate(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega) # Rotate into body frame
+            quad_omega = isaac_math_utils.quat_apply(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega) # Rotate into body frame
             gravity_vec = self.gravity.tile(com_pos.shape[0], 1) # (N, 3)
             Id_3 = torch.eye(3, device=self.device).unsqueeze(0).tile(com_pos.shape[0], 1, 1) # (N, 3, 3)
         
@@ -531,7 +531,7 @@ class DecoupledController():
         else:
             ff_vel = torch.zeros_like(com_vel)
             ff_acc = torch.zeros_like(com_vel)
-            com_omega = isaac_math_utils.quat_rotate(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega)
+            com_omega = isaac_math_utils.quat_apply(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega)
 
             pos_error = com_pos - desired_pos
             vel_error = com_vel - ff_vel
@@ -762,7 +762,7 @@ class DecoupledController():
         M = torch.zeros(batch_size, 8, 8, device=self.device)
         g = torch.zeros(batch_size, 8, device=self.device)
         Cv = torch.zeros_like(g)
-        quad_vel_b = isaac_math_utils.quat_rotate_inverse(quad_ori_quat, quad_vel_w)
+        quad_vel_b = isaac_math_utils.quat_apply_inverse(quad_ori_quat, quad_vel_w)
         to_np = lambda x : x.detach().cpu().numpy() 
         quad_quat_scalar_last = isaac_math_utils.convert_quat(quad_ori_quat, to="xyzw")
         transform = torch.eye(8, 8, device=self.device).tile(batch_size, 1, 1) # matrix that will transform dynamics to use COM velocity in place of quad velocity
@@ -778,7 +778,7 @@ class DecoupledController():
             pin.centerOfMass(self.model, self.model_data, q, v, np.zeros(self.model.nv))
             tvdot[i, :3] = torch.as_tensor(self.model_data.acom[0], device=self.device)
     
-        accel_des = isaac_math_utils.quat_rotate_inverse(quad_ori_quat, accel_des) # body frame acceleration for pinocchio
+        accel_des = isaac_math_utils.quat_apply_inverse(quad_ori_quat, accel_des) # body frame acceleration for pinocchio
         accel_des = torch.cat([accel_des, att_pd, shoulder_pd_accel, wrist_pd_accel], dim=1)
         velocity_vector = torch.cat([quad_vel_b, quad_omega_b, shoulder_joint_vel, wrist_joint_vel], dim=1)
         velocity_vector = torch.bmm(transform, velocity_vector.unsqueeze(-1)).squeeze() # linear velocity of COM now, instead of base
@@ -828,7 +828,7 @@ class DecoupledController():
 
         shoulder_joint_pos = isaac_math_utils.wrap_to_pi(shoulder_joint_pos)
         wrist_joint_pos = isaac_math_utils.wrap_to_pi(wrist_joint_pos)
-        quad_vel_b = isaac_math_utils.quat_rotate_inverse(quad_ori_quat, quad_vel_w)
+        quad_vel_b = isaac_math_utils.quat_apply_inverse(quad_ori_quat, quad_vel_w)
         # shoulder_pd_accel = -self.kp_shoulder * shoulder_error - self.kd_shoulder * shoulder_joint_vel
         # wrist_pd_accel = -self.kp_wrist * wrist_error - self.kd_wrist * wrist_joint_vel
 
@@ -842,7 +842,7 @@ class DecoupledController():
         R_des = flat_utils.getRotationFromShape(f_des, quad_desired_yaw)
         # for pinocchio, place desired acceleration in body frame - also don't need the gravity term now since it'll be added back
         # in the manipulator equation
-        # accel_des = isaac_math_utils.quat_rotate_inverse(quad_ori_quat, accel_des)
+        # accel_des = isaac_math_utils.quat_apply_inverse(quad_ori_quat, accel_des)
         R_actual = isaac_math_utils.matrix_from_quat(quad_ori_quat)
         S_err = 0.5 * (torch.bmm(R_des.transpose(-2, -1), R_actual) - torch.bmm(R_actual.transpose(-2, -1), R_des)) # (batch_size, 3, 3)
         att_err = vee_map(S_err) # (batch_size, 3)
@@ -907,7 +907,7 @@ class DecoupledController():
         """
 
         # Get the local y-axis of the quad in the world frame, then the angle of that vector w.r.t ground plane
-        y_local_w = isaac_math_utils.quat_rotate(quad_ori_quat, torch.tensor([[0.0, 1.0, 0.0]], device=quad_ori_quat.device).tile(quad_ori_quat.shape[0], 1))
+        y_local_w = isaac_math_utils.quat_apply(quad_ori_quat, torch.tensor([[0.0, 1.0, 0.0]], device=quad_ori_quat.device).tile(quad_ori_quat.shape[0], 1))
         quad_angles = torch.arcsin(torch.clamp(y_local_w[:, -1], -1.0+1e-8, 1.0-1e-8)).unsqueeze(1)
         return quad_angles - shoulder_angle
 
@@ -961,7 +961,7 @@ class DecoupledController():
         dynamics from arm and rotational dynamics.
         Args:
         """
-        quad_omega_w = isaac_math_utils.quat_rotate(quad_ori_w, quad_omega_b)
+        quad_omega_w = isaac_math_utils.quat_apply(quad_ori_w, quad_omega_b)
         euler_xyz = torch.cat(isaac_math_utils.euler_xyz_from_quat(quad_ori_w), dim=0).unsqueeze(0)
         delta_euler = quad_omega_w * dt
         euler_xyz_new = isaac_math_utils.wrap_to_pi(euler_xyz + delta_euler)

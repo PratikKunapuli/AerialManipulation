@@ -1,7 +1,7 @@
 # Launch Sim window
 import argparse
 # from isaacsim import SimulationApp
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(description="Run demo with Isaac Sim")
@@ -30,7 +30,7 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from omni.isaac.lab_tasks.utils import parse_env_cfg
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 import utils.math_utilities as math_utils
 
 import gymnasium as gym

@@ -9,18 +9,18 @@ import gymnasium as gym
 import torch
 import math
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.assets import Articulation, ArticulationCfg
-from omni.isaac.lab.envs import DirectRLEnv, DirectRLEnvCfg
-from omni.isaac.lab.envs.ui import BaseEnvWindow
-from omni.isaac.lab.markers import VisualizationMarkers
-from omni.isaac.lab.scene import InteractiveSceneCfg
-from omni.isaac.lab.sim import SimulationCfg
-from omni.isaac.lab.terrains import TerrainImporterCfg
-from omni.isaac.lab.utils import configclass
-from omni.isaac.lab.utils.math import subtract_frame_transforms, random_yaw_orientation, matrix_from_quat, matrix_from_euler, quat_rotate_inverse, quat_rotate, normalize, wrap_to_pi, quat_apply
-from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR
+import isaaclab.sim as sim_utils
+from isaaclab.assets import Articulation, ArticulationCfg
+from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+from isaaclab.envs.ui import BaseEnvWindow
+from isaaclab.markers import VisualizationMarkers
+from isaaclab.scene import InteractiveSceneCfg
+from isaaclab.sim import SimulationCfg
+from isaaclab.terrains import TerrainImporterCfg
+from isaaclab.utils import configclass
+from isaaclab.utils.math import subtract_frame_transforms, random_yaw_orientation, matrix_from_quat, matrix_from_euler, quat_apply_inverse, quat_apply, normalize, wrap_to_pi, quat_apply
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 
 from utils.assets import MODELS_PATH
 from configs.aerial_manip_asset import CRAZYFLIE_MANIPULATOR_0DOF_CFG, CRAZYFLIE_MANIPULATOR_0DOF_LONG_CFG
@@ -30,8 +30,8 @@ import utils.flatness_utilities as flatness_utils
 ##
 # Pre-defined configs
 ##
-from omni.isaac.lab_assets import CRAZYFLIE_CFG  # isort: skip
-from omni.isaac.lab.markers import CUBOID_MARKER_CFG  # isort: skip
+from isaaclab_assets import CRAZYFLIE_CFG  # isort: skip
+from isaaclab.markers import CUBOID_MARKER_CFG  # isort: skip
 
 
 class QuadrotorEnvWindow(BaseEnvWindow):
@@ -76,7 +76,7 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
     sim: SimulationCfg = SimulationCfg(
         dt=1 / sim_rate_hz,
         render_interval=decimation,
-        disable_contact_processing=True,
+        #disable_contact_processing=True,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
             restitution_combine_mode="multiply",
@@ -499,9 +499,9 @@ class QuadrotorEnv(DirectRLEnv):
 
         yaw_error = yaw_error_from_quats(self._robot.data.root_quat_w, goal_ori_w, 0)
 
-        lin_vel_b = quat_rotate_inverse(ori_w, lin_vel_w)
-        ang_vel_b = quat_rotate_inverse(ori_w, ang_vel_w)
-        grav_vector_b = quat_rotate_inverse(ori_w, self._grav_vector_unit)
+        lin_vel_b = quat_apply_inverse(ori_w, lin_vel_w)
+        ang_vel_b = quat_apply_inverse(ori_w, ang_vel_w)
+        grav_vector_b = quat_apply_inverse(ori_w, self._grav_vector_unit)
 
         obs = torch.cat(
             [
@@ -562,8 +562,8 @@ class QuadrotorEnv(DirectRLEnv):
 
     def _get_rewards(self) -> torch.Tensor:
         pos_w, ori_w, lin_vel_w, ang_vel_w = self.get_body_state_by_name(self.cfg.reward_task_body)
-        lin_vel_b = quat_rotate_inverse(ori_w, lin_vel_w)
-        ang_vel_b = quat_rotate_inverse(ori_w, ang_vel_w)
+        lin_vel_b = quat_apply_inverse(ori_w, lin_vel_w)
+        ang_vel_b = quat_apply_inverse(ori_w, ang_vel_w)
 
 
         ## implementing LQR style rewards
@@ -775,7 +775,7 @@ class QuadrotorEnv(DirectRLEnv):
     
     def compute_desired_pose_from_transform(self, goal_pos_w, goal_ori_w, pos_transform):
         # Find b2 in the ori frame, set z component to 0 and the desired yaw is the atan2 of the x and y components
-        b2 = quat_rotate(goal_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=goal_ori_w.device).tile(goal_ori_w.shape[0], 1))
+        b2 = quat_apply(goal_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=goal_ori_w.device).tile(goal_ori_w.shape[0], 1))
         if self.cfg.num_joints == 0:
             b2[:, 2] = 0.0
         b2 = normalize(b2)
