@@ -1,13 +1,17 @@
 from __future__ import annotations
 
+import math
 import torch
 
 # Isaac SDK imports
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg, RigidObject, RigidObjectCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+import isaaclab.envs.mdp as mdp
 from isaaclab.envs.ui import BaseEnvWindow
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
@@ -23,9 +27,11 @@ from isaaclab.utils.math import (
     quat_apply,
     quat_apply_inverse,
     quat_mul,
+    quat_unique,
     yaw_quat,
     quat_conjugate,
     quat_from_euler_xyz,
+    rigid_body_twist_transform,
     euler_xyz_from_quat,
     matrix_from_euler,
     wrap_to_pi,
@@ -54,10 +60,13 @@ from utils.math_utilities import (
     calculate_required_pos,
     aerial_manipulator_angle_errors,
     aerial_manipulator_angle_solns_2dof,
+    vee_map,
+    hat_map,
 )
 from utils.trajectory_utilities import eval_sinusoid
 import utils.trajectory_utilities as traj_utils
 import utils.math_utilities as math_utils
+import utils.flatness_utilities as flatness_utils
 
 class AerialManipulatorTrajectoryTrackingEnvWindow(BaseEnvWindow):
     """4Window manager for the Quadcopter environment."""
@@ -80,19 +89,75 @@ class AerialManipulatorTrajectoryTrackingEnvWindow(BaseEnvWindow):
 
 
 @configclass
+class EventCfg:
+    """Configuration for events - used for domain randomization."""
+    randomize_endeffector_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["endeffector"]),
+            "mass_distribution_params": (-0.2, 0.0),
+            "operation": "add",
+        },
+    )
+
+    randomize_quad_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["vehicle"]),
+            "mass_distribution_params": (-0.15, 0.15),
+            "operation": "add",
+        },
+    )
+
+    randomize_arm_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["endeffector_com"]),
+            "mass_distribution_params": (-0.05, 0.05),
+            "operation": "add",
+        },
+    )
+
+    # random disturbance forces/torques on vehicle base - manifests as a delta v term
+    # randomize_vehicle_base_force = EventTerm(
+    #     func=mdp.push_by_setting_velocity,
+    #     mode="interval",
+    #     interval_range_s=(0.1, 1.0),
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", body_names=["vehicle"]),
+    #         "velocity_range": {
+    #             "x": (-0.2, 0.2),
+    #             "y": (-0.2, 0.2),
+    #             "z": (-0.2, 0.2),
+    #             "roll": (-0.2, 0.2),
+    #             "pitch": (-0.2, 0.2),
+    #             "yaw": (-0.2, 0.2),
+    #         },
+    #     },
+    # )
+
+
+@configclass
 class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     sim_rate_hz = 100
     policy_rate_hz = 50
     decimation = sim_rate_hz // policy_rate_hz
     ui_window_class_type = AerialManipulatorTrajectoryTrackingEnvWindow
-    num_states = 0
+    state_space = 0
     debug_vis = True
+
+    # added as a way to make curriculum learning easier to formulate in terms of iterations instead of timesteps,
+    # changing this via hydra won't change the actual behavior of the algorithm
+    num_steps_per_env = 32
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
         dt=1 / sim_rate_hz,
-        render_interval=1,
+        render_interval=decimation,
         #disable_contact_processing=True,
         physics_material=sim_utils.RigidBodyMaterialCfg(
             friction_combine_mode="multiply",
@@ -116,6 +181,8 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
         debug_vis=False,
     )
 
+    events = EventCfg()
+
     action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(4,))
     observation_space= gym.spaces.Box(low=-np.inf, high=np.inf, shape=(17,))
     state_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(0,))
@@ -126,21 +193,23 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     traj_update_dt = 0.02
 
     trajectory_type = "lissaajous"
-    trajectory_horizon = 10
+    trajectory_horizon = 5
     random_shift_trajectory = False
     # TODO: this is not changed at this level using hydra args, happens once __init__ called for env
     eval_trajectory = "" or trajectory_type
-
+ 
     # (x, y, z, roll, pitch, yaw)
-    lissajous_amplitudes = [0.0] * 6
-    lissajous_amplitudes_rand_ranges = [2.0, 2.0, 1.0, np.pi, np.pi, np.pi]#[1.0, 1.0, 1.0, np.pi, np.pi, np.pi]
-    lissajous_frequencies = [0.0] * 6#[1.5, 1.5, 1.5, 0.5, 0.5, 2.0]
-    lissajous_frequencies_rand_ranges = [0.5, 0.5, 1.0, 1.0, 1.0, 1.0]#[1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+    lissajous_amplitudes = [0.0] * 6#[1.0, 1.0, 1.0, 3*np.pi/4, 3*np.pi/4, 3*np.pi/4]
+    lissajous_amplitudes_rand_ranges = [1.0, 1.0, 1.0, np.pi, np.pi, np.pi]#[1.0, 1.0, 1.0, np.pi, np.pi, np.pi]
+    lissajous_frequencies = [0.0] * 6#[1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
+    lissajous_frequencies_rand_ranges = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0]#[1.0, 1.0, 1.0, 0.5, 0.5, 0.5]
     lissajous_phases = [0.0]*6
     lissajous_phases_rand_ranges = [np.pi]*6
     lissajous_offsets = [0.0, 0.0, 2.0, 0.0, 0.0, 0.0] # Higher z offset just to avoid fake crashes
     lissajous_offsets_rand_ranges = [2.0, 2.0, 0.5, np.pi, np.pi, np.pi]
 
+    reset_curriculum = 50
+    reset_curriculum_rand_range = 1.0
 
     polynomial_x_coefficients= [0.5, 0.5]
     polynomial_y_coefficients= [0.5, 0.5]
@@ -160,32 +229,57 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     moment_scale_z = 0.025 # 0.025 # 0.1
     thrust_to_weight = 3.0
 
-    # curriculum for trajectory tracking - gradually increase speed
-    trajectory_curriculum = 0.1
-
     # reward scales
     body_pos_radius_start = 0.8
-    body_pos_radius_curriculum = int(3e7) #int(1e7) # 10e6
+    body_pos_radius_curriculum = 75 #int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
-    body_pos_distance_reward_scale = 0.0 #15.0
+    body_pos_distance_reward_scale = 1.0 #15.0
 
     ee_pos_radius_start = 0.8
-    ee_pos_radius_curriculum = int(3.5e7) #int(2e7) # 10e6
-    ee_pos_error_reward_scale = -0.5 # -1.0
-    ee_pos_distance_reward_scale = 5.0 #15.0
+    ee_pos_radius_curriculum = 75
+    ee_pos_error_reward_scale = 0.0 # -1.0
+    ee_pos_distance_reward_scale = 10.0 #15.0
 
-    ori_radius_start = 0.8
-    ori_radius_curriculum = int(3.5e7) #int(2e7)
-    ori_distance_reward_scale = 7.5 #15.0
-    ori_error_reward_scale = 0.0 # -0.5
+    ori_radius_start = 1.0
+    ori_radius_curriculum = 75
+    ori_distance_reward_scale = 6.0 #15.0
+    ori_error_reward_scale = -0.1 # -0.5
 
-    lin_vel_reward_scale = -0.1 # -0.05
-    ang_vel_reward_scale = -0.5 # -0.01
-    body_ang_vel_reward_scale = 0.0
-    joint_vel_reward_scale = 0.0 # -0.01
+    lin_vel_reward_scale = -0.05 # -0.05
+    lin_vel_radius_start = 2.0
+    lin_vel_radius_curriculum = 0  # Set to > 0 to enable curriculum
+    lin_vel_distance_reward_scale = 0.0  # Reward scale for curriculum-based distance reward
+    
+    ang_vel_reward_scale = -0.1# -0.01
+    ang_vel_radius_start = 5.0
+    ang_vel_radius_curriculum = 0  # Set to > 0 to enable curriculum
+    ang_vel_distance_reward_scale = 0.0  # Reward scale for curriculum-based distance reward
+    
+    body_ang_vel_reward_scale = -0.1
+    body_ang_vel_radius_start = 0.8
+    body_ang_vel_radius_curriculum = 0  # Set to > 0 to enable curriculum
+    body_ang_vel_distance_reward_scale = 0.0  # Reward scale for curriculum-based distance reward
+
+    jitter_reward_scale = 0.0 # Penalizes jittering of body angular velocity in the local x and y axes
+    
+    joint_vel_reward_scale = -0.1 # -0.01
+    joint_vel_radius_start = 0.5
+    joint_vel_radius_curriculum = 0  # Set to > 0 to enable curriculum
+    joint_vel_distance_reward_scale = 0.0  # Reward scale for curriculum-based distance reward
+
+    action_norm_reward_scale = -0.01
+    action_delta_reward_scale = -0.05
+    
     action_norm_prop_reward_scale = 0.0 # -0.01
     action_joint_norm_reward_scale = 0.0 # 0.0
-    previous_action_reward_scale = 0.0 # -0.1
+    previous_action_prop_reward_scale = 0.0 # -0.01
+    previous_action_joint_reward_scale = 0.0 # -0.01
+    action_delta_prop_radius_start = 1.0
+    action_delta_prop_radius_curriculum = 0  # Set to > 0 to enable curriculum
+    action_delta_prop_distance_reward_scale = 0.0  # Reward scale for curriculum-based distance reward
+    action_delta_joint_radius_start = 1.0
+    action_delta_joint_radius_curriculum = 0  # Set to > 0 to enable curriculum
+    action_delta_joint_distance_reward_scale = 0.0  # Reward scale for curriculum-based distance reward
     
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
@@ -200,19 +294,40 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     
     wrist_error_reward_scale = 0.0 #-2.0 
     wrist_radius_start = 0.8
-    wrist_radius_curriculum = int(9e6)
+    wrist_radius_curriculum = 0
     wrist_distance_reward_scale = 0.0#1.0
 
     axis_reward_scale = 0.0
 
     stay_alive_reward = 0.0
     crash_penalty = 0.0
-    scale_reward_with_time = False
+    scale_reward_with_time = True
     square_reward_errors = False
     square_pos_error = True
     combined_alpha = 0.0
     combined_tolerance = 0.0
     combined_scale = 0.0
+
+    # Motor dynamics (Crazyflie rotor parameters)
+    rotor_arm_length = 0.043  # named to avoid conflict with manipulator arm_length
+    k_eta = 2.3e-8            # thrust coefficient
+    k_m = 7.8e-10             # moment coefficient
+    tau_m = 0.005             # motor time constant [s]
+    motor_speed_min = 0.0
+    motor_speed_max = 2500.0
+
+    # Control mode: "CTBM" (collective thrust + body moments, default) or "CTATT" (collective thrust + attitude setpoint)
+    control_mode = "CTBM"
+
+    # CTATT inner-loop PD gains (only active when control_mode == "CTATT")
+    kp_att = 1575
+    kd_att = 229.93
+    attitude_scale_xy = 0.2
+    attitude_scale_z = torch.pi - 1e-6
+
+    # PD attitude loop runs at sim_rate_hz; pd_loop_decimation=1 means every physics step
+    pd_loop_rate_hz = sim_rate_hz
+    pd_loop_decimation = sim_rate_hz // pd_loop_rate_hz
 
     goal_pos_range = 2.0
     goal_yaw_range = 3.14159
@@ -224,12 +339,12 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     # "initial" - Goal position and orientation is the initial position and orientation of the robot
     goal_pos = None
     goal_vel = None
-    init_pos_ranges=[0.5, 0.5, 0.2]
-    init_lin_vel_ranges=[0.2, 0.2, 0.2]
-    init_yaw_ranges=[0.5]
+    init_pos_ranges=[1.5, 1.5, 0.2]
+    init_lin_vel_ranges=[0.5, 0.5, 0.5]
+    init_yaw_ranges=[1.5]
     init_ang_vel_ranges=[0.1, 0.1, 0.1]
-    init_joint_ranges =[0.5, 0.5]
-    init_joint_vel_ranges =[0.1, 0.1]
+    init_joint_ranges =[1.5, 1.5]
+    init_joint_vel_ranges =[0.5, 0.5]
 
     init_cfg = "rand" # "default" or "rand"
 
@@ -259,9 +374,9 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
 @configclass
 class AerialManipulator0DOFTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
 
@@ -275,9 +390,9 @@ class AerialManipulator0DOFTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryT
 @configclass
 class AerialManipulator0DOFLongArmTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
     
@@ -287,9 +402,9 @@ class AerialManipulator0DOFLongArmTrajectoryTrackingEnvCfg(AerialManipulatorTraj
 @configclass
 class AerialManipulator0DOFSmallArmCOMVehicleTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
     
@@ -299,9 +414,9 @@ class AerialManipulator0DOFSmallArmCOMVehicleTrajectoryTrackingEnvCfg(AerialMani
 @configclass
 class AerialManipulator0DOFSmallArmCOMMiddleTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
     
@@ -311,9 +426,9 @@ class AerialManipulator0DOFSmallArmCOMMiddleTrajectoryTrackingEnvCfg(AerialManip
 @configclass
 class AerialManipulator0DOFSmallArmCOMEndEffectorTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
     
@@ -323,9 +438,9 @@ class AerialManipulator0DOFSmallArmCOMEndEffectorTrajectoryTrackingEnvCfg(Aerial
 @configclass
 class AerialManipulator0DOFQuadOnlyTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
     
@@ -336,9 +451,9 @@ class AerialManipulator0DOFQuadOnlyTrajectoryTrackingEnvCfg(AerialManipulatorTra
 @configclass
 class AerialManipulator0DOFDebugTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 4
+    action_space = 4
     num_joints = 0
-    num_observations = 91 # TODO: Need to update this..
+    observation_space = 91 # TODO: Need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 9(ori) = 18
     # 3(vel) + 3(ang vel) + 3(pos) + 3(grav vector body frame) = 12
 
@@ -369,11 +484,11 @@ class AerialManipulator0DOFDebugTrajectoryTrackingEnvCfg(AerialManipulatorTrajec
 @configclass
 class AerialManipulator2DOFTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # env
-    num_actions = 6
+    action_space = 6
     num_joints = 2
-    num_observations = 16 # TODO: might need to update this..
+    observation_space = 16 # TODO: might need to update this..
     # 3(vel) + 3(ang vel) + 3(pos) + 3(ori) + 2(joint pos) + 2(joint vel) = 16
-    action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(6,))
+    # action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(6,))
 
     # robot
     robot: ArticulationCfg = AERIAL_MANIPULATOR_2DOF_CFG.replace(prim_path="/World/envs/env_.*/Robot")
@@ -387,17 +502,22 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
     def __init__(self, cfg: AerialManipulatorTrajectoryTrackingEnvBaseCfg, render_mode: str | None = None, **kwargs):
         super().__init__(cfg, render_mode, **kwargs)
-
-        self.action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(self.cfg.num_actions,))
-        self.observation_space= gym.spaces.Box(low=-np.inf, high=np.inf, shape=(self.cfg.num_observations,))
+        self.action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(self.cfg.action_space,))
+        self.observation_space= gym.spaces.Box(low=-np.inf, high=np.inf, shape=(self.cfg.observation_space,))
         self.state_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(0,))
 
         # Actions / Actuation interfaces
-        self._actions = torch.zeros(self.num_envs, self.cfg.num_actions, device=self.device)
-        self._previous_actions = torch.zeros(self.num_envs, self.cfg.num_actions, device=self.device)
+        self._actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
+        self._previous_actions = torch.zeros(self.num_envs, self.cfg.action_space, device=self.device)
         self._joint_torques = torch.zeros(self.num_envs, self._robot.num_joints, device=self.device)
         self._body_forces = torch.zeros(self.num_envs, 1, 3, device=self.device)
         self._body_moment = torch.zeros(self.num_envs, 1, 3, device=self.device)
+
+        # Motor dynamics state
+        self._wrench_des = torch.zeros(self.num_envs, 4, device=self.device)
+        self._motor_speeds = torch.zeros(self.num_envs, 4, device=self.device)
+        self._motor_speeds_des = torch.zeros(self.num_envs, 4, device=self.device)
+        self._previous_omega_err = torch.zeros(self.num_envs, 3, device=self.device)
 
         # Goal State   
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
@@ -423,7 +543,6 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # self.frequencies = torch.zeros(self.num_envs, 4, device=self.device)
         # self.phases = torch.zeros(self.num_envs, 4, device=self.device)
         # self.offsets = torch.zeros(self.num_envs, 4, device=self.device)
-        self._configure_trajectories()
 
         # Time(needed for trajectory tracking)
         self._time = torch.zeros(self.num_envs, 1, device=self.device)
@@ -474,8 +593,11 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 "body_pos_distance",
                 "endeffector_combined_error",
                 "endeffector_lin_vel",
+                "endeffector_lin_vel_distance",
                 "endeffector_ang_vel",
+                "endeffector_ang_vel_distance",
                 "body_ang_vel",
+                "body_ang_vel_distance",
                 "endeffector_pos_error",
                 "endeffector_pos_distance",
                 "endeffector_ori_distance",
@@ -487,9 +609,16 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 "wrist_joint_error",
                 "wrist_joint_distance",
                 "joint_vel",
+                "joint_vel_distance",
+                "action_norm",
+                "action_delta",
                 "action_norm_prop",
                 "action_norm_joint",
-                "action_delta",
+                "action_delta_prop",
+                "action_delta_joint",
+                "action_delta_prop_distance",
+                "action_delta_joint_distance",
+                "jitter",
                 "stay_alive",
                 "crash_penalty",
                 "axis_reward",
@@ -503,6 +632,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 "combined_error",
                 "ee_pos_error",
                 "body_ang_vel",
+                "jitter",
                 "ori_error",
                 "yaw_error",
                 "shoulder_joint_error",
@@ -511,9 +641,12 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 "lin_vel",
                 "ang_vel",
                 "joint_vel",
+                "action_norm",
+                "action_delta",
                 "action_norm_prop",
                 "action_norm_joint",
-                "action_delta",
+                "action_delta_prop",
+                "action_delta_joint",
                 "stay_alive",
                 "crash_penalty",
                 "axis_reward",
@@ -531,7 +664,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         if self.cfg.has_end_effector:
             self._ee_id = self._robot.find_bodies("endeffector")[0] # also the root of the system
-
+            self._ee_com_id = self._robot.find_bodies("endeffector_com")[0]
         
         if self.cfg.num_joints > 0:
             self._shoulder_joint_idx = self._robot.find_joints("joint_shoulder")[0][0]
@@ -604,6 +737,52 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self._grav_vector_unit = torch.tensor([0.0, 0.0, -1.0], device=self.device).tile((self.num_envs, 1))
         self._grav_vector = torch.tensor(self.cfg.sim.gravity, device=self.device).tile((self.num_envs, 1))
 
+        # Rotor geometry for motor dynamics (matches Crazyflie layout)
+        r2o2 = math.sqrt(2.0) / 2.0
+        _rotor_positions = torch.cat(
+            [
+                self.cfg.rotor_arm_length * torch.tensor([[r2o2,  r2o2, 0]]),
+                self.cfg.rotor_arm_length * torch.tensor([[r2o2, -r2o2, 0]]),
+                self.cfg.rotor_arm_length * torch.tensor([[-r2o2, -r2o2, 0]]),
+                self.cfg.rotor_arm_length * torch.tensor([[-r2o2,  r2o2, 0]]),
+            ],
+            dim=0,
+        ).to(self.device)
+        self._rotor_directions = torch.tensor([1, -1, 1, -1], device=self.device)
+        self.k_motor = self.cfg.k_m / self.cfg.k_eta  # torque-to-thrust ratio
+
+        # Force-to-wrench mapping: [T, Mx, My, Mz] = f_to_TM @ [f1, f2, f3, f4]
+        self.f_to_TM = torch.cat(
+            [
+                torch.tensor([[1, 1, 1, 1]], device=self.device),
+                torch.cat(
+                    [
+                        torch.linalg.cross(
+                            _rotor_positions[i],
+                            torch.tensor([0.0, 0.0, 1.0], device=self.device),
+                        ).view(-1, 1)[0:2]
+                        for i in range(4)
+                    ],
+                    dim=1,
+                ).to(self.device),
+                self.k_motor * self._rotor_directions.view(1, -1),
+            ],
+            dim=0,
+        )
+        self.TM_to_f = torch.linalg.inv(self.f_to_TM)
+
+        # Per-environment vehicle inertia tensor (tiled for batched bmm)
+        self.inertia_tensor = (
+            self._robot.root_physx_view.get_inertias()[0, self._body_id, :]
+            .view(-1, 3, 3)
+            .tile(self.num_envs, 1, 1)
+            .to(self.device)
+        )
+
+        # Hover motor speed: 4 * k_eta * omega^2 = robot_weight  =>  omega = sqrt(w / (4*k_eta))
+        self._hover_motor_speed = math.sqrt(self._robot_weight / (4.0 * self.cfg.k_eta))
+        self._motor_speeds[:] = self._hover_motor_speed
+
         # Visualization marker data
         if self.cfg.viz_mode == "triad" or self.cfg.viz_mode == "frame":
             self._frame_positions = torch.zeros(self.num_envs, 2, 3, device=self.device)
@@ -634,6 +813,14 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self.yaw_radius = self.cfg.yaw_radius_start
         self.shoulder_radius = self.cfg.shoulder_radius_start
         self.wrist_radius = self.cfg.wrist_radius_start
+        self.lin_vel_radius = self.cfg.lin_vel_radius_start
+        self.ang_vel_radius = self.cfg.ang_vel_radius_start
+        self.body_ang_vel_radius = self.cfg.body_ang_vel_radius_start
+        self.joint_vel_radius = self.cfg.joint_vel_radius_start
+        self.action_delta_prop_radius = self.cfg.action_delta_prop_radius_start
+        self.action_delta_joint_radius = self.cfg.action_delta_joint_radius_start
+        self._configure_trajectories()
+        # breakpoint()
 
         # import code; code.interact(local=locals())
 
@@ -643,9 +830,10 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         eval_trajectory = self.cfg.eval_trajectory
 
         # Easy to visualize known trajectories for eval:
-        if eval_trajectory == "shoulder" or eval_trajectory == "s":
+        l = self.arm_length
+        if eval_trajectory in ("shoulder", "s"):
         # Trajectory where only shoulder angle should change:
-            self.cfg.lissajous_amplitudes = [0.0, 0.2, 0.2, np.pi / 2, 0.0, 0.0]
+            self.cfg.lissajous_amplitudes = [0.0, l, l, np.pi / 2, 0.0, 0.0]
             self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
             self.cfg.lissajous_frequencies = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0]
             self.cfg.lissajous_frequencies_rand_ranges = [0.0] * 6
@@ -654,7 +842,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             self.cfg.lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
             self.cfg.lissajous_offsets_rand_ranges = [0.0] * 6
 
-        elif eval_trajectory == "wrist" or eval_trajectory == "w":
+        elif eval_trajectory in ("wrist", "w"):
         # Trajectory where only wrist angle should change:
             self.cfg.lissajous_amplitudes = [0.0, 0.0, 0.0, 0.0, np.pi / 2, 0.0]
             self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
@@ -666,8 +854,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             self.cfg.lissajous_offsets_rand_ranges = [0.0] * 6
 
         # Trajectory where only yaw angle should change:
-        elif eval_trajectory == "yaw" or eval_trajectory == "y":
-            self.cfg.lissajous_amplitudes = [0.2, 0.2, 0.0, 0.0, 0.0, np.pi / 2]
+        elif eval_trajectory in ("yaw", "y"):
+            self.cfg.lissajous_amplitudes = [l, l, 0.0, 0.0, 0.0, np.pi / 2]
             self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
             self.cfg.lissajous_frequencies = [1.0, 1.0, 0.0, 0.0, 0.0, 1.0]
             self.cfg.lissajous_frequencies_rand_ranges = [0.0] * 6
@@ -675,6 +863,20 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             self.cfg.lissajous_phases_rand_ranges = [0.0]*6
             self.cfg.lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
             self.cfg.lissajous_offsets_rand_ranges = [0.0] * 6
+
+        elif eval_trajectory in ("hover", "h"):
+            self.cfg.lissajous_amplitudes = [0.0] * 6
+            self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
+
+        elif eval_trajectory in ("line", "l"):
+            self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
+            self.cfg.lissajous_frequencies_rand_ranges = [0.0] * 6
+            horizontal_amplitude = 2 * (2 * np.random.rand() - 1) # [-2, 2]
+            vertical_amplitude = 2 * np.random.rand() - 1 # [-1, 1]
+            self.cfg.lissajous_amplitudes = [horizontal_amplitude, horizontal_amplitude, vertical_amplitude, 0.0, 0.0, 0.0]
+            horizontal_frequency = 0.5 + 0.5 * np.random.rand() # [0.5, 1.0]
+            vertical_frequency = 0.5 + 0.5 * np.random.rand() # [0.5, 1.0]
+            self.cfg.lissajous_frequencies = [horizontal_frequency, horizontal_frequency, vertical_frequency, 0.0, 0.0, 0.0]
 
         self.lissajous_amplitudes = torch.tensor(self.cfg.lissajous_amplitudes, device=self.device).tile((self.num_envs, 1)).float()
         self.lissajous_amplitudes_rand_ranges = torch.tensor(self.cfg.lissajous_amplitudes_rand_ranges, device=self.device).float()
@@ -706,63 +908,149 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self.polynomial_yaw_rand_ranges = torch.tensor(self.cfg.polynomial_yaw_rand_ranges, device=self.device).float()
 
 
+    def _compute_motor_speeds(self, wrench_des: torch.Tensor) -> torch.Tensor:
+        """Convert a desired wrench [T, Mx, My, Mz] (num_envs, 4) to desired motor speeds (num_envs, 4)."""
+        f_des = torch.matmul(self.TM_to_f, wrench_des.t()).t()
+        motor_speed_squared = f_des / self.cfg.k_eta
+        motor_speeds_des = torch.sign(motor_speed_squared) * torch.sqrt(torch.abs(motor_speed_squared))
+        motor_speeds_des = motor_speeds_des.clamp(self.cfg.motor_speed_min, self.cfg.motor_speed_max)
+        return motor_speeds_des
+
+    def _get_moment_from_ctatt(self, actions: torch.Tensor) -> torch.Tensor:
+        """Compute commanded body moments from a CTATT policy output via a PD attitude controller.
+
+        Actions[:, 1:4] are interpreted as attitude setpoints (roll/pitch via s2 projection, yaw).
+        Uses the vehicle body orientation and angular velocity (not the articulation root, which
+        may be the end-effector for the aerial manipulator).
+        """
+        vehicle_ori_quat = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)
+        ori_matrix = matrix_from_quat(vehicle_ori_quat)
+
+        # Desired orientation from s2 projection + yaw
+        shape_des = flatness_utils.s2_projection(
+            actions[:, 1] * self.cfg.attitude_scale_xy,
+            actions[:, 2] * self.cfg.attitude_scale_xy,
+        )
+        psi_des = actions[:, 3] * self.cfg.attitude_scale_z
+        ori_des_matrix = flatness_utils.getRotationFromShape(shape_des, psi_des)
+
+        S_err = 0.5 * (
+            torch.bmm(ori_des_matrix.transpose(-2, -1), ori_matrix)
+            - torch.bmm(ori_matrix.transpose(-2, -1), ori_des_matrix)
+        )
+        att_err = vee_map(S_err)
+
+        # Angular velocity of the vehicle body in body frame
+        vehicle_ang_vel_w = self._robot.data.body_ang_vel_w[:, self._body_id].squeeze(1)
+        omega = quat_apply_inverse(vehicle_ori_quat, vehicle_ang_vel_w)
+
+        omega_des = torch.zeros(self.num_envs, 3, device=self.device)
+        omega_err = omega - omega_des
+
+        att_pd = -self.cfg.kp_att * att_err - self.cfg.kd_att * omega_err
+        I_omega = torch.bmm(self.inertia_tensor, omega.unsqueeze(2)).squeeze(2)
+        cmd_moment = (
+            torch.bmm(self.inertia_tensor, att_pd.unsqueeze(2)).squeeze(2)
+            + torch.cross(omega, I_omega, dim=1)
+        )
+        return cmd_moment
+
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0) # clamp the actions to [-1, 1]
 
-        # Need to compute joint torques, body forces, and body moments
-        # TODO: Implement pre-physics step
+        # Propulsion actions occupy indices [0:4]:
+        #   Action[0] = Collective Thrust (normalized)
+        #   CTBM:  Action[1] = Mx, Action[2] = My, Action[3] = Mz
+        #   CTATT: Action[1] = roll setpoint, Action[2] = pitch setpoint, Action[3] = yaw setpoint
+        # Optional joint torque actions:
+        #   Action[4] = Joint 1 Torque (if joint exists)
+        #   Action[5] = Joint 2 Torque (if joint exists)
 
-        # CTBM + Joint Torques Model
-        # Action[0] = Collective Thrust
-        # Action[1] = Body X moment
-        # Action[2] = Body Y moment
-        # Action[3] = Body Z moment
-        # Action[4] = Joint 1 Torque if joint exists
-        # Action[5] = Joint 2 Torque if joint exists
-        self._body_forces[:, 0, 2] = ((self._actions[:, 0] + 1.0) / 2.0) * (self._robot_weight * self.cfg.thrust_to_weight)
-        self._body_moment[:, 0, :2] = self._actions[:, 1:3] * self.cfg.moment_scale_xy
-        self._body_moment[:, 0, 2] = self._actions[:, 3] * self.cfg.moment_scale_z
+        # Collective thrust is always the same regardless of control mode
+        self._wrench_des[:, 0] = ((self._actions[:, 0] + 1.0) / 2.0) * (self._robot_weight * self.cfg.thrust_to_weight)
 
-        # print("Body Forces: ", self._body_forces)
-        # print("Body Moments: ", self._body_moment)
+        if self.cfg.control_mode == "CTBM":
+            self._wrench_des[:, 1:3] = self._actions[:, 1:3] * self.cfg.moment_scale_xy
+            self._wrench_des[:, 3] = self._actions[:, 3] * self.cfg.moment_scale_z
+        elif self.cfg.control_mode == "CTATT":
+            self._wrench_des[:, 1:] = self._get_moment_from_ctatt(self._actions)
+        else:
+            raise NotImplementedError(f"Control mode {self.cfg.control_mode} is not implemented.")
+
+        self._motor_speeds_des = self._compute_motor_speeds(self._wrench_des)
+        self.pd_loop_counter = 0
+
         if self.cfg.num_joints > 0:
             self._joint_torques[:, self._shoulder_joint_idx] = self._actions[:, 4] * self.cfg.shoulder_torque_scalar
         if self.cfg.num_joints > 1:
             self._joint_torques[:, self._wrist_joint_idx] = self._actions[:, 5] * self.cfg.wrist_torque_scalar
-            # self._joint_torques[:, self._wrist_joint_idx] = 0.0 # Turn off wrist joint for now
 
 
     def _apply_action(self):
         """
-        Apply the torques directly to the joints based on the actions.
-        Apply the propellor forces/moments to the vehicle body.
+        Apply joint torques, then propagate motor dynamics and apply the resulting
+        propulsion wrench to the vehicle body.
         """
         if self.cfg.num_joints > 0:
             self._robot.set_joint_effort_target(self._joint_torques[:,self._shoulder_joint_idx], joint_ids=self._shoulder_joint_idx)
         if self.cfg.num_joints > 1:
             self._robot.set_joint_effort_target(self._joint_torques[:,self._wrist_joint_idx], joint_ids=self._wrist_joint_idx)
 
-        self._robot.set_external_force_and_torque(self._body_forces, self._body_moment, body_ids=self._body_id)
+        # Re-run attitude controller and re-compute desired motor speeds at the PD loop rate
+        if self.pd_loop_counter % self.cfg.pd_loop_decimation == 0:
+            if self.cfg.control_mode == "CTATT":
+                self._wrench_des[:, 1:] = self._get_moment_from_ctatt(self._actions)
+            self._motor_speeds_des = self._compute_motor_speeds(self._wrench_des)
+        self.pd_loop_counter += 1
 
-    def _apply_curriculum(self, total_timesteps):
+        # First-order motor speed dynamics: tau_m * d(omega)/dt = omega_des - omega
+        motor_accel = (1.0 / self.cfg.tau_m) * (self._motor_speeds_des - self._motor_speeds)
+        self._motor_speeds += motor_accel * self.physics_dt
+        self._motor_speeds = self._motor_speeds.clamp(self.cfg.motor_speed_min, self.cfg.motor_speed_max)
+
+        # Convert actual motor speeds to wrench and apply to vehicle body
+        motor_forces = self.cfg.k_eta * self._motor_speeds ** 2
+        wrench = torch.matmul(self.f_to_TM, motor_forces.t()).t()
+
+        self._body_forces[:, 0, 2] = wrench[:, 0]
+        self._body_moment[:, 0, :] = wrench[:, 1:]
+
+        self._robot.permanent_wrench_composer.set_forces_and_torques(
+            body_ids=self._body_id, forces=self._body_forces, torques=self._body_moment
+        )
+
+    def _apply_curriculum(self):
         """
         Apply the curriculum to the environment.
         """
         # print("[Isaac Env: Curriculum] Total Timesteps: ", total_timesteps, " Pos Radius: ", self.cfg.pos_radius)
+        iteration = self.common_step_counter // self.cfg.num_steps_per_env
         if self.cfg.ee_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.ee_pos_radius = max(self.cfg.ee_pos_radius_start * (0.5 ** (total_timesteps // self.cfg.ee_pos_radius_curriculum)), 0.01)
+            self.ee_pos_radius = max(self.cfg.ee_pos_radius_start * (0.5 ** (iteration // self.cfg.ee_pos_radius_curriculum)), 0.01)
         if self.cfg.body_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.body_pos_radius = max(self.cfg.body_pos_radius_start * (0.5 ** (total_timesteps // self.cfg.body_pos_radius_curriculum)), 0.1)
+            self.body_pos_radius = max(self.cfg.body_pos_radius_start * (0.5 ** (iteration // self.cfg.body_pos_radius_curriculum)), 0.1)
         if self.cfg.ori_radius_curriculum > 0:
-            self.ori_radius = max(self.cfg.ori_radius_start * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum)), 0.1)
+            self.ori_radius = max(self.cfg.ori_radius_start * (0.5 ** (iteration // self.cfg.ori_radius_curriculum)), 1e-3)
         if self.cfg.yaw_radius_curriculum > 0:
-            self.yaw_radius = max(self.cfg.yaw_radius_start * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum)), 0.1)
+            self.yaw_radius = max(self.cfg.yaw_radius_start * (0.5 ** (iteration // self.cfg.yaw_radius_curriculum)), 0.1)
         if self.cfg.shoulder_radius_curriculum > 0:
-            self.shoulder_radius = max(self.cfg.shoulder_radius_start * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum)), 0.1)
+            self.shoulder_radius = max(self.cfg.shoulder_radius_start * (0.5 ** (iteration // self.cfg.shoulder_radius_curriculum)), 0.1)
         if self.cfg.wrist_radius_curriculum > 0:
-            self.wrist_radius = max(self.cfg.wrist_radius_start * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum)), 0.1)
+            self.wrist_radius = max(self.cfg.wrist_radius_start * (0.5 ** (iteration // self.cfg.wrist_radius_curriculum)), 0.1)
+        if self.cfg.lin_vel_radius_curriculum > 0:
+            self.lin_vel_radius = max(self.cfg.lin_vel_radius_start * (0.5 ** (iteration // self.cfg.lin_vel_radius_curriculum)), 0.01)
+        if self.cfg.ang_vel_radius_curriculum > 0:
+            self.ang_vel_radius = max(self.cfg.ang_vel_radius_start * (0.5 ** (iteration // self.cfg.ang_vel_radius_curriculum)), 0.01)
+        if self.cfg.body_ang_vel_radius_curriculum > 0:
+            self.body_ang_vel_radius = max(self.cfg.body_ang_vel_radius_start * (0.5 ** (iteration // self.cfg.body_ang_vel_radius_curriculum)), 0.01)
+        if self.cfg.joint_vel_radius_curriculum > 0:
+            self.joint_vel_radius = max(self.cfg.joint_vel_radius_start * (0.5 ** (iteration // self.cfg.joint_vel_radius_curriculum)), 0.01)
+        if self.cfg.action_delta_prop_radius_curriculum > 0:
+            self.action_delta_prop_radius = max(self.cfg.action_delta_prop_radius_start * (0.5 ** (iteration // self.cfg.action_delta_prop_radius_curriculum)), 0.01)
+        if self.cfg.action_delta_joint_radius_curriculum > 0:
+            self.action_delta_joint_radius = max(self.cfg.action_delta_joint_radius_start * (0.5 ** (iteration // self.cfg.action_delta_joint_radius_curriculum)), 0.01)
 
 
 
@@ -885,9 +1173,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         """
         Returns the observation dictionary. Policy observations are in the key "policy".
         """
-        self._apply_curriculum(self.common_step_counter * self.num_envs)
+        self._apply_curriculum()
         self.update_goal_state()
-        
         
         base_pos_w, base_ori_w, lin_vel_w, ang_vel_w = self.get_frame_state_from_task(self.cfg.task_body)
         goal_pos_w, goal_ori_w = self.get_goal_state_from_task(self.cfg.goal_body)
@@ -908,23 +1195,35 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # Get vehicle frame info
         body_pos_w, body_ori_w, body_lin_vel_w, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
+        com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
 
         # For quad body, we only care about the position error, so can use any orientation for calculating the frame transform
         body_pos_error, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
                                                           self._desired_body_pos, body_ori_w)
-        body_pos_error_2, _ = self.convert_ee_goal_from_task(goal_pos_w, goal_ori_w, "vehicle")
-        # body_pos_error_2 = quat_rotate_inverse(body_ori_w, body_pos_error_2)
+        
+        # goal in body frame
+        _, goal_to_body_ori = subtract_frame_transforms(body_pos_w, body_ori_w, goal_pos_w, goal_ori_w)
+        goal_to_body_pos, _ = subtract_frame_transforms(body_pos_w, base_ori_w, goal_pos_w, goal_ori_w) # hack trying for now - express this in ee axes
+
+        # end effector to body transfrom
+        ee_to_body_pos, ee_to_body_ori = subtract_frame_transforms(body_pos_w, body_ori_w, base_pos_w, base_ori_w)
+        body_to_ee_pos, body_to_ee_ori = subtract_frame_transforms(base_pos_w, base_ori_w, body_pos_w, body_ori_w)
+
+        # com_pos_error, _ = subtract_frame_transforms(com_pos_w, body_ori_w, self._desired_com_pos, body_ori_w)
+
+        # body_pos_error_2, _ = self.convert_ee_goal_from_task(goal_pos_w, goal_ori_w, "vehicle")
+        # body_pos_error_2 = quat_apply_inverse(body_ori_w, body_pos_error_2)
         # print(body_pos_error[:5])
         # print('-'*20)
         # print(body_pos_error_2[:5])
 
         # End effector in body frame
-        ee_pos_body, ee_ori_body = subtract_frame_transforms(body_pos_w, body_ori_w,
-                                                          base_pos_w, base_ori_w)
+        # ee_pos_body, ee_ori_body = subtract_frame_transforms(body_pos_w, body_ori_w,
+        #                                                   base_pos_w, base_ori_w)
 
-        body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
-        body_roll = torch.reshape(body_roll, (-1, 1))
-        body_pitch = torch.reshape(body_pitch, (-1, 1))
+        # body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
+        # body_roll = torch.reshape(body_roll, (-1, 1))
+        # body_pitch = torch.reshape(body_pitch, (-1, 1))
 
         yaw_error, shoulder_error, wrist_error = aerial_manipulator_angle_errors(base_ori_w, goal_ori_w)
 
@@ -932,46 +1231,74 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         future_pos_error_b = []
         future_ori_error_b = []
         future_body_pos_error_b = []
-        for i in range(self.cfg.trajectory_horizon):
-            goal_pos_traj_w, goal_ori_traj_w = self.convert_ee_goal_from_task(self._desired_pos_traj_w[:, i+1].squeeze(1), self._desired_ori_traj_w[:, i+1].squeeze(1), self.cfg.goal_body)
-            # goal_body_pos_traj_w, _ = self.convert_ee_goal_from_task(self._desired_pos_traj_w[:, i+1].squeeze(1), self._desired_ori_traj_w[:, i+1].squeeze(1), "vehicle")
-            waypoint_pos_error_b, waypoint_ori_error_b = subtract_frame_transforms(base_pos_w, base_ori_w, goal_pos_traj_w, goal_ori_traj_w)
-            waypoint_body_pos_error_b, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
-                                                          self._desired_body_pos_traj[:, i+1].squeeze(1), body_ori_w)            
-            future_pos_error_b.append(waypoint_pos_error_b) # append (n, 3) tensor
-            future_ori_error_b.append(waypoint_ori_error_b) # append (n, 4) tensor
-            future_body_pos_error_b.append(waypoint_body_pos_error_b)
-        if len(future_pos_error_b) > 0:
-            future_pos_error_b = torch.stack(future_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
-            future_ori_error_b = torch.stack(future_ori_error_b, dim=1) # stack to (n, horizon, 4) tensor
-            future_body_pos_error_b = torch.stack(future_body_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
-            if self.cfg.use_yaw_representation_for_trajectory:
-                future_ori_error_b = math_utils.yaw_from_quat(future_ori_error_b).reshape(self.num_envs, self.cfg.trajectory_horizon, 1)
+        # future_com_pos_error_b = []
+        # for i in range(self.cfg.trajectory_horizon):
+        #     goal_pos_traj_w, goal_ori_traj_w = self.convert_ee_goal_from_task(self._desired_pos_traj_w[:, i+1].squeeze(1), self._desired_ori_traj_w[:, i+1].squeeze(1), self.cfg.goal_body)
+        #     # goal_body_pos_traj_w, _ = self.convert_ee_goal_from_task(self._desired_pos_traj_w[:, i+1].squeeze(1), self._desired_ori_traj_w[:, i+1].squeeze(1), "vehicle")
+        #     waypoint_pos_error_b, waypoint_ori_error_b = subtract_frame_transforms(base_pos_w, base_ori_w, goal_pos_traj_w, goal_ori_traj_w)
+        #     waypoint_body_pos_error_b, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
+        #         self._desired_body_pos_traj[:, i+1].squeeze(1), body_ori_w
+        #     )
+        #     # waypoint_body_pos_error_b, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
+        #         # self._desired_pos_traj_w[:, i+1].squeeze(1), body_ori_w
+        #     # )
+        #     # waypoint_com_pos_error_b, _ = subtract_frame_transforms(
+        #     #     com_pos_w, body_ori_w,self._desired_com_pos_traj[:, i+1].squeeze(1), body_ori_w
+        #     # )
+        #     future_pos_error_b.append(waypoint_pos_error_b) # append (n, 3) tensor
+        #     future_ori_error_b.append(waypoint_ori_error_b) # append (n, 4) tensor
+        #     future_body_pos_error_b.append(waypoint_body_pos_error_b)
+        #     # future_com_pos_error_b.append(waypoint_com_pos_error_b)
+        # if len(future_pos_error_b) > 0:
+        #     future_pos_error_b = torch.stack(future_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
+        #     future_ori_error_b = torch.stack(future_ori_error_b, dim=1) # stack to (n, horizon, 4) tensor
+        #     future_body_pos_error_b = torch.stack(future_body_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
+        #     # future_com_pos_error_b = torch.stack(future_com_pos_error_b, dim=1) # stack to (n, horizon, 3) tensor
+        #     if self.cfg.use_yaw_representation_for_trajectory:
+        #         future_ori_error_b = math_utils.yaw_from_quat(future_ori_error_b).reshape(self.num_envs, self.cfg.trajectory_horizon, 1)
+        if self.cfg.trajectory_horizon > 0:
+            future_pos_error_b, future_ori_error_b = subtract_frame_transforms(
+                base_pos_w.unsqueeze(1).repeat(1, self.cfg.trajectory_horizon, 1),
+                base_ori_w.unsqueeze(1).repeat(1, self.cfg.trajectory_horizon, 1),
+                self._desired_pos_traj_w[:, 1:],
+                self._desired_ori_traj_w[:, 1:]
+            )
+            future_ori_error_b = quat_unique(future_ori_error_b)
+            future_body_pos_error_b, _ = subtract_frame_transforms(
+                body_pos_w.unsqueeze(1).repeat(1, self.cfg.trajectory_horizon, 1),
+                body_ori_w.unsqueeze(1).repeat(1, self.cfg.trajectory_horizon, 1),
+                self._desired_body_pos_traj[:, 1:],
+                body_ori_w.unsqueeze(1).repeat(1, self.cfg.trajectory_horizon, 1)
+            )
         else:
             future_pos_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
             future_ori_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 4, device=self.device)
             future_body_pos_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
+            # future_com_pos_error_b = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
         
 
         # Compute the orientation error as a yaw error in the body frame
         # goal_yaw_w = yaw_quat(self._desired_ori_w)
-        goal_yaw_w = yaw_quat(goal_ori_w)
-        current_yaw_w = yaw_quat(base_ori_w)
+        # goal_yaw_w = yaw_quat(goal_ori_w)
+        # current_yaw_w = yaw_quat(base_ori_w)
         # yaw_error_w = quat_mul(quat_inv(current_yaw_w), goal_yaw_w)
-        yaw_error_w = yaw_error_from_quats(current_yaw_w, goal_yaw_w, dof=self.cfg.num_joints).view(self.num_envs, 1)
+        # yaw_error_w = yaw_error_from_quats(current_yaw_w, goal_yaw_w, dof=self.cfg.num_joints).view(self.num_envs, 1)
         
-        if self.cfg.use_yaw_representation:
-            yaw_representation = yaw_error_w
-        else:
-            yaw_representation = torch.zeros(self.num_envs, 0, device=self.device)
+        # if self.cfg.use_yaw_representation:
+        #     yaw_representation = yaw_error_w
+        # else:
+        #     yaw_representation = torch.zeros(self.num_envs, 0, device=self.device)
         
-
         if self.cfg.use_full_ori_matrix:
             ori_representation_b = matrix_from_quat(ori_error_b).flatten(-2, -1)
             body_ori_representation = matrix_from_quat(body_ori_w).flatten(-2, -1)
+            goal_to_body_ori_representation = matrix_from_quat(goal_to_body_ori).flatten(-2, -1)
+            ee_to_body_ori_representation = matrix_from_quat(ee_to_body_ori).flatten(-2, -1)
         else:
-            ori_representation_b = torch.zeros(self.num_envs, 0, device=self.device)
-            body_ori_representation = body_ori_w
+            ori_representation_b = quat_unique(ori_error_b)
+            body_ori_representation = quat_unique(body_ori_w)
+            goal_to_body_ori_representation = quat_unique(goal_to_body_ori)
+            ee_to_body_ori_representation = quat_unique(ee_to_body_ori)
 
         if self.cfg.use_grav_vector:
             grav_vector_b = quat_apply_inverse(base_ori_w, self._grav_vector_unit) # projected gravity vector in the cfg frame
@@ -980,12 +1307,14 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         
         # Compute the linear and angular velocities of the end-effector in body frame
         if self.cfg.trajectory_horizon > 0 and not self.cfg.gc_mode:
-            lin_vel_error_w = self._pos_traj[1, :, :, 0] - lin_vel_w
+            lin_vel_des = self._pos_traj[1, :, :, 0]
+            lin_vel_error_w = lin_vel_des - lin_vel_w
             # Also make have the body velocity be relative to the target
-            body_lin_vel_w = self._pos_traj[1, :, :, 0] - body_lin_vel_w
+            body_lin_vel_error_w = lin_vel_des - body_lin_vel_w
         else:
+            lin_vel_des = torch.zeros_like(lin_vel_w, device=self.device)
             lin_vel_error_w = lin_vel_w
-            body_lin_vel_w = body_lin_vel_w
+            body_lin_vel_error_w = body_lin_vel_w
 
         lin_vel_b = quat_apply_inverse(base_ori_w, lin_vel_error_w)
         if self.cfg.use_ang_vel_from_trajectory and self.cfg.trajectory_horizon > 0 and not self.cfg.gc_mode:
@@ -994,23 +1323,32 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             ang_vel_des[:, 1] = self._pitch_traj[1, :, 0]
             ang_vel_des[:, 2] = self._yaw_traj[1, :, 0]
             ang_vel_error_w = ang_vel_des - ang_vel_w
-            body_ang_vel_w = ang_vel_des - body_ang_vel_w
+            body_ang_vel_error_w = ang_vel_des - body_ang_vel_w
         else:
+            ang_vel_des = torch.zeros_like(ang_vel_w)
             ang_vel_error_w = ang_vel_w
-            body_ang_vel_w = body_ang_vel_w
+            body_ang_vel_error_w = body_ang_vel_w
         ang_vel_b = quat_apply_inverse(base_ori_w, ang_vel_error_w)
 
         # Component of the desired angular velocity vector about the shoulder actuation axis (quadrotor forward axis)
         axis = quat_apply(body_ori_w, torch.tensor([[1.0, 0.0, 0.0]], device=body_ori_w.device).tile((body_ori_w.shape[0], 1)))
-        ang_vel_des_shoulder = (ang_vel_b * axis).sum(dim=-1, keepdim=True)
+        ang_vel_des_shoulder = (ang_vel_des * axis).sum(dim=-1, keepdim=True)
 
         # Component of the desired angular velocity vector about the wrist actuation axis (end effector y-axis)
         axis = quat_apply(base_ori_w, torch.tensor([[0.0, 1.0, 0.0]], device=base_ori_w.device).tile((base_ori_w.shape[0], 1)))
-        ang_vel_des_wrist = (ang_vel_b * axis).sum(dim=-1, keepdim=True)
+        ang_vel_des_wrist = (ang_vel_des * axis).sum(dim=-1, keepdim=True)
 
         # Do the same for the body frame
         body_lin_vel_b = quat_apply_inverse(body_ori_w, body_lin_vel_w)
         body_ang_vel_b = quat_apply_inverse(body_ori_w, body_ang_vel_w)
+        body_lin_vel_error_b = quat_apply_inverse(body_ori_w, body_lin_vel_error_w)
+        body_ang_vel_error_b = quat_apply_inverse(body_ori_w, body_ang_vel_error_w)
+
+        # Given the pose of the body relative to the end effector, compute the required linear velocity of the body (function also gives
+        # angular velocity but rigid body assumption does not hold)
+        # body_lin_vel_b_des, _ = rigid_body_twist_transform(lin_vel_des, ang_vel_des, body_to_ee_pos, body_to_ee_ori)
+        # true_body_lin_vel_error_b = body_lin_vel_b_des - body_lin_vel_b
+
 
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
@@ -1024,6 +1362,9 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             wrist_joint_pos = wrap_to_pi(self._robot.data.joint_pos[:, self._wrist_joint_idx].unsqueeze(1))
             wrist_joint_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx].unsqueeze(1)
 
+        shoulder_vel_error = ang_vel_des_shoulder - shoulder_joint_vel
+        wrist_vel_error = ang_vel_des_wrist - wrist_joint_vel
+
         # Embeddings
         shoulder_joint_pos_embedding = torch.cat([torch.cos(shoulder_joint_pos), torch.sin(shoulder_joint_pos)], dim=-1)
         wrist_joint_pos_embedding = torch.cat([torch.cos(wrist_joint_pos), torch.sin(wrist_joint_pos)], dim=-1)
@@ -1034,13 +1375,6 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         else:
             previous_actions = torch.zeros(self.num_envs, 0, device=self.device)
 
-
-        # First attempt: for current time step, use the same observations as the hover env, and keep the horizon to only include the task (ee) pos/ori error.
-        # If needed, will update so that the horizon includes the body (vehicle) pos/ori error.
-        # body_ori_w_flattened_matrix = matrix_from_quat(body_ori_w).flatten(-2, -1)
-        body_ori_error_b = torch.stack((body_roll, body_pitch, yaw_error), dim=1).squeeze(-1)
-        body_ori_error_b = matrix_from_euler(body_ori_error_b, convention="XYZ")
-        body_ori_error_b = body_ori_error_b.flatten(-2, -1)
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
@@ -1049,22 +1383,30 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 # yaw_error,
                 # shoulder_error,
                 # wrist_error,
-                body_pos_error,                             # (num_envs, 3) [3-5]
+                # body_pos_error,                             # (num_envs, 3) [3-5]
+                goal_to_body_pos,
                 body_ori_representation,                                 # (num_envs, 4) [6-9]
-                # body_ori_error_b,
+                # goal_to_body_ori_representation,
+                ee_to_body_ori_representation,
                 # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
                 # goal_ori_w_flattened_matrix,                # [12-20]
                 grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
+                body_lin_vel_b,
+                # body_lin_vel_error_b,
+                body_ang_vel_b,
+                # body_ang_vel_error_b,
                 # wrist_error,                                # (num_envs, 1) [31]
                 # shoulder_joint_pos,                         # (num_envs, 1) [30]
                 # wrist_joint_pos,                            # (num_envs, 1) [34]
                 # shoulder_joint_pos_embedding,
                 # wrist_joint_pos_embedding,
-                # wrist_error,                                # (num_envs, 1) [32]
-                # shoulder_joint_vel,                         # (num_envs, 1) [32]
-                # wrist_joint_vel,                            # (num_envs, 1) [33]
+                # wrist_error,  
+                shoulder_joint_vel,                         # (num_envs, 1) [32]
+                wrist_joint_vel,                            # (num_envs, 1) [33]
+                # shoulder_vel_error,
+                # wrist_vel_error,
                 previous_actions,
                 future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
                 future_ori_error_b.flatten(-2, -1),          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
@@ -1075,17 +1417,22 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # Additional critic observations
         if self.cfg.num_joints == 2:
+            # critic_obs = obs
+            # give access to the randomized masses
             critic_obs = torch.cat(
                 [
-                    pos_error_b,                                # (num_envs, 3) [0-2]
-                    ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
-                    body_pos_error,
-                    body_ori_representation,
+                    obs,
+                    # pos_error_b,                                # (num_envs, 3) [0-2]
+                    # ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
+                    # com_pos_error,
+                    # body_pos_error,
+                    # true_body_lin_vel_error_b,
+                    # body_ori_representation,
                     # body_ori_error_b,
                     # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
-                    grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
-                    lin_vel_b,                                  # (num_envs, 3)
-                    ang_vel_b,                                  # (num_envs, 3)
+                    # grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
+                    # lin_vel_b,                                  # (num_envs, 3)
+                    # ang_vel_b,                                  # (num_envs, 3)
                     # body_lin_vel_b,
                     # body_ang_vel_b,                    
                     # shoulder_joint_pos,                         # (num_envs, 1)
@@ -1095,12 +1442,18 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                     # yaw_error,
                     # shoulder_error,
                     # wrist_error,
-                    shoulder_joint_vel,                         # (num_envs, 1)
-                    wrist_joint_vel,  
-                    previous_actions,
-                    future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
-                    future_ori_error_b.flatten(-2, -1),          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
-                    future_body_pos_error_b.flatten(-2, -1),     # (num_envs, horizon * 3)
+                    # shoulder_joint_vel,                         # (num_envs, 1)
+                    # wrist_joint_vel,
+                    # shoulder_vel_error,
+                    # wrist_vel_error,
+                    # previous_actions,
+                    # future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
+                    # future_ori_error_b.flatten(-2, -1),          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                    # future_body_pos_error_b.flatten(-2, -1),     # (num_envs, horizon * 3)
+                    # future_com_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
+                    self._robot.root_physx_view.get_masses()[:, self._body_id].to(self.device), # body
+                    self._robot.root_physx_view.get_masses()[:, self._ee_com_id].to(self.device), # arm
+                    self._robot.root_physx_view.get_masses()[:, self._ee_id].to(self.device), # mass at end effector
                 ],
                 dim=-1
             )
@@ -1131,7 +1484,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 future_com_pos_w = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
                 future_com_ori_w = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 4, device=self.device)
 
-            com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
+            # com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
 
             self.last_yaw_cmd, shoulder_req, wrist_req = aerial_manipulator_angle_solns_2dof(self.model_ee_ori.tile((self.num_envs, 1)), goal_ori_w, self.last_yaw_cmd)
             shoulder_error_2 = wrap_to_pi(shoulder_joint_pos - shoulder_req)
@@ -1169,6 +1522,9 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         if self.cfg.eval_mode:
             pos_traj = self._pos_traj[:3,:,:,0].permute(1,0,2).reshape(self.num_envs, -1)
             yaw_traj = self._yaw_traj[:2,:,0].permute(1,0).reshape(self.num_envs, -1)
+            if not self.cfg.gc_mode:
+                # Keep track of what the ideal angles should (almost) be for debugging
+                self.last_yaw_cmd, shoulder_req, wrist_req = aerial_manipulator_angle_solns_2dof(self.model_ee_ori.tile((self.num_envs, 1)), goal_ori_w, self.last_yaw_cmd)
             full_state = torch.cat(
                 [
                     quad_pos_w,                                 # (num_envs, 3) [0-2]
@@ -1191,10 +1547,15 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                     body_pos_error,                             # (num_envs, 3) [47-49]
                     yaw_error,                                  # (num_envs, 1) [50]
                     shoulder_error,                             # (num_envs, 1) [51]
-                    pos_traj,
-                    yaw_traj,
+                    ang_vel_error_w,                            # (num_envs, 3) [52-54]
+                    ang_vel_b,                                  # (num_envs, 3) [55-57]
+                    self.last_yaw_cmd,
+                    shoulder_req,
+                    wrist_req,
+                    # pos_traj,                                   # (num_envs, 3 * (horizon + 1)) [52-54] 
+                    # yaw_traj,                                   # (num_envs, (horizon + 1)) [54-56]
                 ],
-                dim=-1                                          # (num_envs, 18)
+                dim=-1                                          # (num_envs, 61)
             )
             self._state = full_state
         else:
@@ -1210,6 +1571,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         goal_pos_w, goal_ori_w = self.get_goal_state_from_task(self.cfg.reward_goal_body)
         
         body_pos_w , _, _, body_ang_vel_w = self.get_frame_state_from_task("vehicle")
+        # com_pos_w, _, _, _ = self.get_frame_state_from_task("COM")
         # Computes the error from the desired position and orientation
         if self.cfg.num_joints != 2:
             body_pos_error = torch.linalg.norm(goal_pos_w - base_pos_w, dim=1)
@@ -1217,6 +1579,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         else:
             ee_pos_error = torch.linalg.norm(goal_pos_w - base_pos_w, dim=1)
             body_pos_error = torch.linalg.norm(self._desired_body_pos - body_pos_w, dim=1)
+            # body_pos_error = torch.linalg.norm(com_pos_w - self._desired_com_pos, dim=1)
         if self.cfg.square_pos_error:
             ee_pos_distance = torch.exp(- (ee_pos_error **2) / self.ee_pos_radius)
             body_pos_distance = torch.exp(- (body_pos_error **2) / self.body_pos_radius)
@@ -1291,26 +1654,47 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         lin_vel_error = torch.norm(lin_vel_b, dim=1)
         # ang_vel_error = torch.sum(torch.square(ang_vel_b), dim=1)
         ang_vel_error = torch.norm(ang_vel_b, dim=1)
-        body_ang_vel_error = torch.norm(body_ang_vel_w, dim=1)
-        # if self.cfg.num_joints == 0:
-        #     joint_vel_error = torch.zeros(1, device=self.device)
-        # elif self.cfg.num_joints > 1:
-        #     joint_vel_error = torch.linalg.norm(self._robot.data.joint_vel[self._wrist_joint_idx:self._shoulder_joint_idx], dim=-1)
-        # elif self.cfg.num_joints > 0:
-        #     joint_vel_error = torch.linalg.norm(self._robot.data.joint_vel[self._shoulder_joint_idx], dim=-1)
-        # joint_vel_error = torch.linalg.norm(self._robot.data.joint_vel, dim=-1)
-        # joint_vel_error = torch.sum(torch.square(self._robot.data.joint_vel), dim=1)
+        # experiment with incorporatin the desired yaw rate 
+        body_ang_vel_des = torch.zeros_like(body_ang_vel_w)
+        # body_ang_vel_des[:, 2] = self._yaw_traj[1, :, 0]
+        body_ang_vel_error = torch.norm(body_ang_vel_w - body_ang_vel_des, dim=1)
+        # body_ang_vel_b = quat_apply_inverse(base_ori_w, body_ang_vel_w)
         joint_vel_error = torch.norm(self._robot.data.joint_vel, dim=1)
+        
+        # Curriculum-based distance rewards for velocity tracking
+        if self.cfg.square_pos_error:
+            lin_vel_distance = torch.exp(-(lin_vel_error ** 2) / self.lin_vel_radius)
+            ang_vel_distance = torch.exp(-(ang_vel_error ** 2) / self.ang_vel_radius)
+            body_ang_vel_distance = torch.exp(-(body_ang_vel_error ** 2) / self.body_ang_vel_radius)
+            joint_vel_distance = torch.exp(-(joint_vel_error ** 2) / self.joint_vel_radius)
+        else:
+            lin_vel_distance = torch.exp(-lin_vel_error / self.lin_vel_radius)
+            ang_vel_distance = torch.exp(-ang_vel_error / self.ang_vel_radius)
+            body_ang_vel_distance = torch.exp(-body_ang_vel_error / self.body_ang_vel_radius)
+            joint_vel_distance = torch.exp(-joint_vel_error / self.joint_vel_radius)
 
         actions = self._actions.clone()
         # For the thrust component of the action, rescale it since an action of -1 corresponds to a thrust of 0
         actions[:, 0] = 0.5 * actions[:, 0] + 0.5
         action_prop_error = torch.norm(actions[:, :4], dim=1)
         action_joint_error = torch.norm(actions[:, -2:], dim=1)
+        action_norm_error = torch.norm(actions, dim=1)
 
-        action_delta_error = torch.norm(self._actions - self._previous_actions, dim=1)
+        action_delta = self._actions - self._previous_actions
+        action_delta_error = torch.norm(action_delta, dim=1)
+        action_delta_prop_error = torch.norm(action_delta[:, :4], dim=1)
+        action_delta_joint_error = torch.norm(action_delta[:, -2:], dim=1)
+        jitter = torch.norm(action_delta[:, 1:3], dim=1)
+
         self._previous_actions = self._actions.clone()
 
+        # Curriculum-based distance rewards for action delta
+        if self.cfg.square_pos_error:
+            action_delta_prop_distance = torch.exp(-(action_delta_prop_error ** 2) / self.action_delta_prop_radius)
+            action_delta_joint_distance = torch.exp(-(action_delta_joint_error ** 2) / self.action_delta_joint_radius)
+        else:
+            action_delta_prop_distance = torch.exp(-action_delta_prop_error / self.action_delta_prop_radius)
+            action_delta_joint_distance = torch.exp(-action_delta_joint_error / self.action_delta_joint_radius)
 
         if self.cfg.scale_reward_with_time:
             time_scale = 1.0 / self.cfg.policy_rate_hz
@@ -1342,6 +1726,12 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             ang_vel_error = ang_vel_error ** 2
             body_ang_vel_error = body_ang_vel_error ** 2
             joint_vel_error = joint_vel_error ** 2
+            lin_vel_distance = lin_vel_distance ** 2
+            ang_vel_distance = ang_vel_distance ** 2
+            body_ang_vel_distance = body_ang_vel_distance ** 2
+            joint_vel_distance = joint_vel_distance ** 2
+            action_delta_prop_distance = action_delta_prop_distance ** 2
+            action_delta_joint_distance = action_delta_joint_distance ** 2
             action_error = action_error ** 2 # Artifact from hover, it's not being squared there either
             combined_distance = combined_distance ** 2
             # NOTE: didn't square the previous action error, that is in the traj tracking env though
@@ -1360,20 +1750,30 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             "body_yaw_error": yaw_error * self.arm_length * self.cfg.yaw_error_reward_scale * time_scale,
             "body_yaw_distance": yaw_distance * self.cfg.yaw_distance_reward_scale * time_scale,
             "endeffector_lin_vel": lin_vel_error * self.cfg.lin_vel_reward_scale * time_scale,
+            "endeffector_lin_vel_distance": lin_vel_distance * self.cfg.lin_vel_distance_reward_scale * time_scale,
             "endeffector_ang_vel": ang_vel_error * self.arm_length * self.cfg.ang_vel_reward_scale * time_scale,
+            "endeffector_ang_vel_distance": ang_vel_distance * self.cfg.ang_vel_distance_reward_scale * time_scale,
             "joint_vel": joint_vel_error * self.cfg.joint_vel_reward_scale * time_scale,
+            "joint_vel_distance": joint_vel_distance * self.cfg.joint_vel_distance_reward_scale * time_scale,
             "shoulder_joint_error": shoulder_joint_error * self.cfg.shoulder_error_reward_scale * time_scale,
             "shoulder_joint_distance": shoulder_joint_distance * self.cfg.shoulder_distance_reward_scale * time_scale,
             "wrist_joint_error": wrist_joint_error * self.cfg.wrist_error_reward_scale * time_scale,
             "wrist_joint_distance": wrist_joint_distance * self.cfg.wrist_distance_reward_scale * time_scale,
             "body_ang_vel": body_ang_vel_error * self.cfg.body_ang_vel_reward_scale * time_scale, # use the same reward scale as the endeffector ang vel for now
+            "body_ang_vel_distance": body_ang_vel_distance * self.cfg.body_ang_vel_distance_reward_scale * time_scale,
             # "joint_vel": combined_distance * self.cfg.joint_vel_reward_scale * time_scale,
+            "action_norm": action_norm_error * self.cfg.action_norm_reward_scale * time_scale,
+            "action_delta": action_delta_error * self.cfg.action_delta_reward_scale * time_scale,
             "action_norm_prop": action_prop_error * self.cfg.action_norm_prop_reward_scale * time_scale,
             "action_norm_joint": action_joint_error * self.cfg.action_joint_norm_reward_scale * time_scale,
-            "action_delta": action_delta_error * self.cfg.previous_action_reward_scale * time_scale,
+            "action_delta_prop": action_delta_prop_error * self.cfg.previous_action_prop_reward_scale * time_scale,
+            "action_delta_joint": action_delta_joint_error * self.cfg.previous_action_joint_reward_scale * time_scale,
+            "action_delta_prop_distance": action_delta_prop_distance * self.cfg.action_delta_prop_distance_reward_scale * time_scale,
+            "action_delta_joint_distance": action_delta_joint_distance * self.cfg.action_delta_joint_distance_reward_scale * time_scale,
             "stay_alive": torch.ones_like(ee_pos_error) * self.cfg.stay_alive_reward * time_scale,
             "crash_penalty": self.reset_terminated[:].float() * crash_penalty_time * time_scale,
             "axis_reward": axis_reward * self.cfg.axis_reward_scale * time_scale,
+            "jitter": jitter * self.cfg.jitter_reward_scale * time_scale,
         }
 
         errors = {
@@ -1389,12 +1789,16 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             "ang_vel": ang_vel_error,
             "body_ang_vel": body_ang_vel_error,
             "joint_vel": joint_vel_error,
+            "action_norm": action_norm_error,
+            "action_delta": action_delta_error,
             "action_norm_prop": action_prop_error,
             "action_norm_joint": action_joint_error,
-            "action_delta": action_delta_error,
+            "action_delta_prop": action_delta_prop_error,
+            "action_delta_joint": action_delta_joint_error,
             "stay_alive": torch.ones_like(ee_pos_error),
             "crash_penalty": self.reset_terminated[:].float(),
             "axis_reward": -1 * axis_reward,
+            "jitter": jitter,
         }
 
         # 7 x 1024 -> 1024
@@ -1459,10 +1863,16 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         extras["Metrics/Quad Position Radius"] = self.body_pos_radius
         extras["Metrics/Ori Radius"] = self.ori_radius
         extras["Metrics/Wrist Radius"] = self.wrist_radius
+        extras["Metrics/Lin Vel Radius"] = self.lin_vel_radius
+        extras["Metrics/Ang Vel Radius"] = self.ang_vel_radius
+        extras["Metrics/Body Ang Vel Radius"] = self.body_ang_vel_radius
+        extras["Metrics/Joint Vel Radius"] = self.joint_vel_radius
+        extras["Metrics/Action Delta Prop Radius"] = self.action_delta_prop_radius
+        extras["Metrics/Action Delta Joint Radius"] = self.action_delta_joint_radius
         extras["Metrics/Unique Crashes"] = torch.count_nonzero(self.crash_mask).item()
-        t = self.common_step_counter * self.num_envs
-        extras["Metrics/Trajectory Curriculum"] = min(self.cfg.trajectory_curriculum * 2 ** (t // 15_000_000), 1.0)
-        extras["Metrics/Common Step Counter"] = self.common_step_counter
+        t = self.common_step_counter // self.cfg.num_steps_per_env
+        extras["Metrics/Reset curriculum"] = min(self.cfg.reset_curriculum_rand_range + 0.1 * (t // self.cfg.reset_curriculum), 1.0)
+        # extras["Metrics/Common Step Counter"] = self.common_step_counter
         self.extras["log"] = dict()
         self.extras["log"].update(extras)
 
@@ -1508,12 +1918,19 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             # traj_pos_start = self._pos_traj[0, env_ids, :, 0]
             # traj_vel_start = self._pos_traj[1, env_ids, :, 0]
             # traj_yaw_start = self._yaw_traj[0, env_ids, 0]
-            pos_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_pos_ranges, device=self.device).float()
-            vel_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_lin_vel_ranges, device=self.device).float()
-            yaw_rand = (torch.rand(len(env_ids), 1, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_yaw_ranges, device=self.device).float()
-            ang_vel_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_ang_vel_ranges, device=self.device).float()
+            if not self.cfg.eval_mode:
+                # t = self.common_step_counter * self.num_envs
+                # decay = min(0.1 + 0.1 * (t // 10_000_000), 1.0)
+                iteration = self.common_step_counter // self.cfg.num_steps_per_env
+                decay = min(self.cfg.reset_curriculum_rand_range + 0.1 * (iteration // self.cfg.reset_curriculum), 1.0)
+            else:
+                decay = 1.0
+            pos_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_pos_ranges, device=self.device).float() * decay
+            vel_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_lin_vel_ranges, device=self.device).float() * decay
+            yaw_rand = (torch.rand(len(env_ids), 1, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_yaw_ranges, device=self.device).float() * decay
+            ang_vel_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_ang_vel_ranges, device=self.device).float() * decay
             init_yaw = init_yaw + yaw_rand
-            joint_rand = (torch.rand(len(env_ids), 2, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_joint_ranges, device=self.device).float()
+            joint_rand = (torch.rand(len(env_ids), 2, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_joint_ranges, device=self.device).float() * decay
             init_shoulder = init_shoulder + joint_rand[:, 0:1]
             init_wrist = init_wrist + joint_rand[:, 1:2]
             joint_vel_rand = torch.zeros(len(env_ids), 2, device=self.device)
@@ -1561,6 +1978,11 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # self.initial_ee_ori[env_ids] = ee_ori_w[env_ids]
         self.last_yaw_cmd[env_ids] = init_yaw
 
+        # Reset motor state: start at hover equilibrium and clear previous controller error
+        self._motor_speeds[env_ids] = self._hover_motor_speed
+        self._motor_speeds_des[env_ids] = self._hover_motor_speed
+        self._previous_omega_err[env_ids] = 0.0
+
     def initialize_trajectories(self, env_ids):
         """
         Initializes the trajectory for the environment ids.
@@ -1568,20 +1990,21 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         num_envs = env_ids.size(0)
 
         # Randomize Lissajous parameters
-        # if not self.cfg.eval_mode:
-        #     t = self.common_step_counter * self.num_envs
-        #     decay = min(self.cfg.trajectory_curriculum * 2 ** (t // 15_000_000), 1.0)
-        # else:
-        #     decay = 1.0
-        random_amplitudes = ((torch.rand(num_envs, 6, device=self.device)) * 2.0 - 1.0) * self.lissajous_amplitudes_rand_ranges
-        random_frequencies = ((torch.rand(num_envs, 6, device=self.device))) * self.lissajous_frequencies_rand_ranges #* decay
+        if not self.cfg.eval_mode:
+            # t = self.common_step_counter * self.num_envs
+            # decay = min(self.cfg.reset_curriculum_rand_range + 0.1 * (t // self.cfg.reset_curriculum), 1.0)
+            decay = 1.0
+        else:
+            decay = 1.0
+        random_amplitudes = ((torch.rand(num_envs, 6, device=self.device)) * 2.0 - 1.0) * self.lissajous_amplitudes_rand_ranges * decay
+        random_frequencies = ((torch.rand(num_envs, 6, device=self.device))) * self.lissajous_frequencies_rand_ranges * decay
         random_phases = ((torch.rand(num_envs, 6, device=self.device)) * 2.0 - 1.0) * self.lissajous_phases_rand_ranges
         random_offsets = ((torch.rand(num_envs, 6, device=self.device)) * 2.0 - 1.0) * self.lissajous_offsets_rand_ranges
 
         # Randomize polynomial parameters
-        random_poly_roll = ((torch.rand(num_envs, len(self.cfg.polynomial_roll_rand_ranges), device=self.device)) * 2.0 - 1.0) * self.polynomial_roll_rand_ranges
-        random_poly_pitch = ((torch.rand(num_envs, len(self.cfg.polynomial_pitch_rand_ranges), device=self.device)) * 2.0 - 1.0) * self.polynomial_pitch_rand_ranges
-        random_poly_yaw = ((torch.rand(num_envs, len(self.cfg.polynomial_yaw_rand_ranges), device=self.device)) * 2.0 - 1.0) * self.polynomial_yaw_rand_ranges
+        random_poly_roll = ((torch.rand(num_envs, len(self.cfg.polynomial_roll_rand_ranges), device=self.device)) * 2.0 - 1.0) * self.polynomial_roll_rand_ranges * decay
+        random_poly_pitch = ((torch.rand(num_envs, len(self.cfg.polynomial_pitch_rand_ranges), device=self.device)) * 2.0 - 1.0) * self.polynomial_pitch_rand_ranges * decay
+        random_poly_yaw = ((torch.rand(num_envs, len(self.cfg.polynomial_yaw_rand_ranges), device=self.device)) * 2.0 - 1.0) * self.polynomial_yaw_rand_ranges * decay
 
         terrain_offsets = torch.zeros_like(random_offsets, device=self.device)
         terrain_offsets[:, :2] = self._terrain.env_origins[env_ids, :2]
@@ -1677,8 +2100,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self.cfg.terrain.env_spacing = self.scene.cfg.env_spacing
         self._terrain = self.cfg.terrain.class_type(self.cfg.terrain)
         # clone, filter, and replicate
-        self.scene.clone_environments(copy_from_source=True)
-        self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
+        self.scene.clone_environments(copy_from_source=False)
+        # self.scene.filter_collisions(global_prim_paths=[self.cfg.terrain.prim_path])
         # add lights
         light_cfg = sim_utils.DomeLightCfg(intensity=2000.0, color=(0.75, 0.75, 0.75))
         light_cfg.func("/World/Light", light_cfg)
