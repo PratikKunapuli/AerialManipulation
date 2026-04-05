@@ -23,7 +23,7 @@ parser.add_argument("--video_length", type=int, default=200, help="Length of the
 parser.add_argument("--video_interval", type=int, default=2000, help="Interval between video recordings (in steps).")
 parser.add_argument("--num_envs", type=int, default=None, help="Number of environments to simulate.")
 parser.add_argument("--task", type=str, default=None, help="Name of the task.")
-parser.add_argument("--seed", type=int, default=None, help="Seed used for the environment")
+parser.add_argument("--seed", type=int, default=10, help="Seed used for the environment")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 # append RSL-RL cli arguments
 cli_args.add_rsl_rl_args(parser)
@@ -84,6 +84,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # override configurations with non-hydra CLI arguments
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.num_steps_per_env = agent_cfg.num_steps_per_env if agent_cfg.num_steps_per_env is not None else env_cfg.num_steps_per_env
     agent_cfg.max_iterations = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg.max_iterations
     )
@@ -116,12 +117,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     log_dir = os.path.join(log_root_path, log_dir)
 
     if env_cfg.use_yaw_representation:
-        # env_cfg.num_observations += 4
-        env_cfg.num_observations += 1
+        # env_cfg.observation_space += 4
+        env_cfg.observation_space += 1
     
     if env_cfg.use_full_ori_matrix:
-        # env_cfg.num_observations += 6
-        env_cfg.num_observations += 9
+        # env_cfg.observation_space += 6
+        env_cfg.observation_space += 9
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)

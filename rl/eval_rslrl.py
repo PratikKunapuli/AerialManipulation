@@ -55,7 +55,6 @@ import yaml
 
 import gymnasium as gym
 import envs
-from controllers.decoupled_controller import DecoupledController
 from controllers.gc_params import gc_params_dict
 
 
@@ -102,6 +101,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     if not args_cli.baseline:
         policy_path = log_dir
     else:
+        from controllers.decoupled_controller import DecoupledController
         # policy_path = "./baseline_0dof/"
         # policy_path = "./baseline_0dof_com_lqr_tune/"
         # policy_path = "./baseline_0dof_com_reward_tune/"
@@ -224,12 +224,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # env_cfg.yaw_radius = 0.5
     
     if env_cfg.use_yaw_representation:
-        # env_cfg.num_observations += 4
-        env_cfg.num_observations += 1
+        # env_cfg.observation_space += 4
+        env_cfg.observation_space += 1
     
     if env_cfg.use_full_ori_matrix:
-        # env_cfg.num_observations += 6
-        env_cfg.num_observations += 9
+        # env_cfg.observation_space += 6
+        env_cfg.observation_space += 9
 
     if "Traj" in args_cli.task:
         env_cfg.goal_cfg = "rand"
@@ -316,7 +316,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # env_cfg.goal_yaw_range = 0.0 #0.0 1.5708  3.14159
 
 
-
     envs = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
 
     save_prefix = args_cli.save_prefix
@@ -335,8 +334,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
         viz_mode = env_cfg.viz_mode
     else:
         viz_mode = ""
-        
-    video_name = save_prefix + "_eval_video" + robot_index_prefix + "_viz_" + viz_mode
+
+    eval_trajectory_prefix = "" if env_cfg.eval_trajectory is None else f"_eval_trajectory_{env_cfg.eval_trajectory}"
+    video_name = save_prefix + "_eval_video" + robot_index_prefix + "_viz_" + viz_mode + eval_trajectory_prefix
     if args_cli.baseline:
         video_folder_path = f"{policy_path}"
     else:
@@ -354,12 +354,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
 
 
     if args_cli.baseline:
-        vehicle_mass = envs.vehicle_mass
-        arm_mass = envs.arm_mass
-        inertia =  envs.quad_inertia
-        arm_offset = envs.arm_offset
-        pos_offset = envs.position_offset
-        ori_offset = envs.orientation_offset
+        robot_env = envs.env.env
+        vehicle_mass = robot_env.vehicle_mass
+        arm_mass = robot_env.arm_mass
+        inertia =  robot_env.quad_inertia
+        arm_offset = robot_env.arm_offset
+        pos_offset = robot_env.position_offset
+        ori_offset = robot_env.orientation_offset
 
         if "Traj" in args_cli.task:
             feed_forward = True
@@ -375,15 +376,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             # use_feed_forward = "Traj" in args_cli.task and "Integral" not in args_cli.task
             control_params_dict = gc_params_dict[task_name]["controller_params"]
             if "2DOF" in args_cli.task:
-                agent = DecoupledController(envs.num_envs, 2, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset,
-                arm_inertia=envs.arm_inertia, arm_length=envs.arm_length, com_pos_w=None, device=device,
+                agent = DecoupledController(robot_env.num_envs, 2, robot_env.vehicle_mass, robot_env.arm_mass, robot_env.quad_inertia, robot_env.arm_offset, robot_env.orientation_offset,
+                arm_inertia=robot_env.arm_inertia, arm_length=robot_env.arm_length, com_pos_w=None, device=device, follow_robot=args_cli.follow_robot,
                                         **control_params_dict)
             else:
-                agent = DecoupledController(envs.num_envs, 0, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset, com_pos_w=None, device=device,
+                agent = DecoupledController(robot_env.num_envs, 0, robot_env.vehicle_mass, robot_env.arm_mass, robot_env.quad_inertia, robot_env.arm_offset, robot_env.orientation_offset, com_pos_w=None, device=device,
                                             **control_params_dict)
         else:
             # Crazyflie DC
-            agent = DecoupledController(envs.num_envs, 0, envs.vehicle_mass, envs.arm_mass, envs.quad_inertia, envs.arm_offset, envs.orientation_offset, com_pos_w=None, device=device,
+            agent = DecoupledController(robot_env.num_envs, 0, robot_env.vehicle_mass, robot_env.arm_mass, robot_env.quad_inertia, robot_env.arm_offset, robot_env.orientation_offset, com_pos_w=None, device=device,
                                         kp_pos_gain_xy=6.5, kp_pos_gain_z=15.0, kd_pos_gain_xy=4.0, kd_pos_gain_z=9.0,
                                         kp_att_gain_xy=544, kp_att_gain_z=544, kd_att_gain_xy=46.64, kd_att_gain_z=46.64, 
                                         skip_precompute=True, vehicle="Crazyflie", control_mode="CTATT", print_debug=False, feed_forward=feed_forward)
@@ -476,6 +477,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 if args_cli.baseline:
                     obs_dict, reward, terminated, truncated, info = envs.step(action)
                     done_count += terminated.sum().item() + truncated.sum().item()
+                    if agent.use_integral:
+                        reset_mask = torch.logical_or(terminated, truncated)
+                        agent.reset_integral_terms(reset_mask)
                 else:
                     obs_dict, reward, dones, extras = envs.step(actions)
                     # print("Reward: ", reward)
@@ -485,44 +489,72 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 rewards[:, steps] = reward.detach()
 
                 steps += 1
-                print("Step: ", steps)
+                if steps % 50 == 0:
+                    print("Step: ", steps)
 
             print("Full states shape: ", full_states.shape)
             torch.save(full_states, os.path.join(policy_path, save_prefix + "eval_full_states.pt"))
             torch.save(rewards, os.path.join(policy_path, save_prefix + "eval_rewards.pt")) # (num_envs, time_steps)
             print(rewards.shape)
             if args_cli.follow_robot != -1:
+                if args_cli.baseline:
+                    print("plotting controller data")
+                    agent.plot_saved()
                 T = rewards.shape[1] - 1
                 x = np.arange(T) * 0.02
                 plot_path = os.path.join(policy_path, "plots", "eval", f"robot{args_cli.follow_robot}")
-                plots = ["Policy shoulder", "Policy wrist", "Policy thrust", "Policy MX",
-                        "Policy MY", "Policy MZ", "Wrist error",
-                        "Shoulder error", "Yaw error", "Shoulder joint position", "Shoulder joint velocity"]
-                cols = [41, 42, 37, 38, 39, 40, 43, 51, 50, 26, 28]
+                plots = {
+                    "Policy shoulder": 41,
+                    "Policy wrist": 42,
+                    "Policy thrust": 37,
+                    "Policy MX": 38,
+                    "Policy MY": 39,
+                    "Policy MZ": 40,
+                    "Wrist error": 43,
+                    "Shoulder error": 51,
+                    "Yaw error": 50,
+                    "Shoulder joint position": 26,
+                    "Shoulder joint velocity": 28,
+                    "Ang vel error w": slice(52, 52+3),
+                    "Ang vel error ee frame": slice(55, 55+3),
+                    "Wrist joint position": 27,
+                    "Wrist joint velocity": 29,
+                }
                 os.makedirs(plot_path, exist_ok=True)
-                for i, plot in enumerate(plots):
+                for plot, col in plots.items():
                     fig, ax = plt.subplots()
-                    plt.plot(x, full_states[args_cli.follow_robot, :-1, cols[i]].cpu())
-                    plt.title(plot)
+                    data = full_states[args_cli.follow_robot, :-1, col].cpu()
+                    ax.plot(x, data.cpu())
+                    if isinstance(col, slice):
+                        ax.legend(['x', 'y', 'z'])
+                    ax.set_title(plot)
                     plot_name = f'eval_{plot}_robot_{args_cli.follow_robot}.png'
-                    plt.savefig(os.path.join(plot_path, plot_name))
+                    fig.savefig(os.path.join(plot_path, plot_name))
                 fig, ax = plt.subplots()
-                plt.plot(x, rewards[args_cli.follow_robot, :-1].cpu())
-                plt.title('Rewards')
+                ax.plot(x, rewards[args_cli.follow_robot, :-1].cpu())
+                ax.set_title('Rewards')
                 plot_name = f'eval_rewards_robot_{args_cli.follow_robot}.png'
-                plt.savefig(os.path.join(plot_path, plot_name))
+                fig.savefig(os.path.join(plot_path, plot_name))
             else:
                 T = rewards.shape[1] - 1
                 x = np.arange(T) * 0.02
                 plot_path = os.path.join(policy_path, "plots", "eval", "all")
                 os.makedirs(plot_path, exist_ok=True)
-                plots = ["Body position error", "Yaw error", "Wrist error"]
-                cols = [slice(47, 47+3), 50, 43]
-                for i, plot in enumerate(plots):
+                plots = {
+                    "Body position error": slice(47, 47+3),
+                    "End Effector position error": slice(44, 44+3),
+                    # "Orientation error": 52,
+                    "Yaw error": 50,
+                    "Wrist error": 43,
+                    "Policy Wrist": 43,
+                }
+                for plot, col in plots.items():
                     fig, axs = plt.subplots(3)
-                    data = full_states[:, :-1, cols[i]]
-                    if plot == "Body position error":
+                    data = full_states[:, :-1, col]
+                    if "position error" in plot:
                         data = data.norm(dim=-1)
+                    elif plot == "Orientation error":
+                        data = data * 180.0 / np.pi
                     data = torch.abs(data)
                     axs[0].plot(x, data.min(dim=0).values.cpu())
                     axs[1].plot(x, data.mean(dim=0).cpu())
@@ -546,7 +578,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 plt.savefig(os.path.join(plot_path, plot_name))
 
             print("Final Info: \n\n", info, "\n")
-
+            print("worst wrist error: ", full_states[:, -2, 43].abs().argmax()) # -2 because reset happens at end
             print("\nAverage inference time: ", np.mean(times))
 
             quad_pos = full_states[args_cli.follow_robot, :-1, 0:3].cpu().numpy()

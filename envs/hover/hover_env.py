@@ -7,8 +7,11 @@ import torch
 import isaaclab.sim as sim_utils
 from isaaclab.assets import Articulation, ArticulationCfg
 from isaaclab.envs import DirectRLEnv, DirectRLEnvCfg
+import isaaclab.envs.mdp as mdp
 from isaaclab.envs.ui import BaseEnvWindow
 from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.managers import EventTermCfg as EventTerm
+from isaaclab.managers import SceneEntityCfg
 from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import SimulationCfg
 from isaaclab.terrains import TerrainImporterCfg
@@ -46,6 +49,47 @@ class AerialManipulatorEnvWindow(BaseEnvWindow):
                     self._create_debug_vis_ui_element("targets", self.env)
 
 @configclass
+class EventCfg:
+    """Configuration for events - used for domain randomization."""
+    randomize_endeffector_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["endeffector"]),
+            "mass_distribution_params": (-0.05, 0.05),
+            "operation": "add",
+        },
+    )
+
+    randomize_quad_mass = EventTerm(
+        func=mdp.randomize_rigid_body_mass,
+        mode="startup",
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["vehicle"]),
+            "mass_distribution_params": (-0.15, 0.15),
+            "operation": "add",
+        },
+    )
+
+    # random disturbance forces/torques on vehicle base - manifests as a delta v term
+    randomize_vehicle_base_force = EventTerm(
+        func=mdp.push_by_setting_velocity,
+        mode="interval",
+        interval_range_s=(0.1, 1.0),
+        params={
+            "asset_cfg": SceneEntityCfg("robot", body_names=["vehicle"]),
+            "velocity_range": {
+                "x": (-0.2, 0.2),
+                "y": (-0.2, 0.2),
+                "z": (-0.2, 0.2),
+                "roll": (-0.2, 0.2),
+                "pitch": (-0.2, 0.2),
+                "yaw": (-0.2, 0.2),
+            },
+        },
+    )
+
+@configclass
 class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     episode_length_s = 10.0
     sim_rate_hz = 100
@@ -56,6 +100,10 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
     debug_vis = True
 
     seed = 0
+
+    # added as a way to make curriculum learning easier to formulate in terms of iterations instead of timesteps,
+    # changing this via hydra won't change the actual behavior of the algorithm - only then the curriculum radius terms change
+    num_steps_per_env = 32
 
     # simulation
     sim: SimulationCfg = SimulationCfg(
@@ -83,10 +131,10 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
         ),
         debug_vis=False,
     )
-
     # scene
     scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=4096, env_spacing=2.5, replicate_physics=True)
-
+    events: EventCfg = EventCfg()
+    
     # action scaling
     # moment_scale_xy = 1.0
     # moment_scale_z = 0.05
@@ -101,29 +149,29 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     # reward scales
     body_pos_radius_start = 0.8
-    body_pos_radius_curriculum = int(9e6) #int(1e7) # 10e6
+    body_pos_radius_curriculum = 0 #int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
     body_pos_distance_reward_scale = 0.0 #15.0
 
     ee_pos_radius_start = 0.8
-    ee_pos_radius_curriculum = int(1.5e7) #int(2e7) # 10e6
+    ee_pos_radius_curriculum = 75 #int(2e7) # 10e6
     ee_pos_error_reward_scale = 0.0
-    ee_pos_distance_reward_scale = 15.0 #15.0
+    ee_pos_distance_reward_scale = 22.0 #15.0
 
-    ori_radius_start = 0.8
-    ori_radius_curriculum = int(3e7) #int(2e7)
-    ori_distance_reward_scale = 20.0
+    ori_radius_start = 2.4
+    ori_radius_curriculum = 75 #int(2e7)
+    ori_distance_reward_scale = 17.0
     ori_error_reward_scale = 0.0
 
     axis_distance_reward_scale = 0.0
     axis_radius = 4.0#1.5 # threshold for axis alignment error under which we will count ori rewards
 
-    lin_vel_reward_scale = -0.5 # -0.05
+    lin_vel_reward_scale = -0.1 # -0.05
     ang_vel_reward_scale = -0.5 # -0.01
     joint_vel_reward_scale = 0.0 # -0.01
     action_prop_norm_reward_scale = 0.0 # -0.01
     action_joint_norm_reward_scale = 0.0 # 0.0
-    previous_action_reward_scale = 0.0 # -0.1
+    previous_action_reward_scale = -0.2 # -0.1
     
     yaw_error_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
@@ -143,7 +191,7 @@ class AerialManipulatorHoverEnvBaseCfg(DirectRLEnvCfg):
 
     stay_alive_reward = 0.0
     crash_penalty = -1.0
-    scale_reward_with_time = False
+    scale_reward_with_time = True
     square_reward_errors = False
     square_pos_error = True
     combined_alpha = 0.0
@@ -535,27 +583,27 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         if self.cfg.num_joints > 1:
             self._robot.set_joint_effort_target(self._joint_torques[:,self._wrist_joint_idx], joint_ids=self._wrist_joint_idx)
 
-        self._robot.set_external_force_and_torque(self._body_forces, self._body_moment, body_ids=self._body_id)
+        self._robot._permanent_wrench_composer.set_forces_and_torques(self._body_forces, self._body_moment, body_ids=self._body_id)
 
-    def _apply_curriculum(self, total_timesteps):
+    def _apply_curriculum(self):
         """
         Apply the curriculum to the environment.
         """
-        # print("[Isaac Env: Curriculum] Total Timesteps: ", total_timesteps, " Pos Radius: ", self.cfg.pos_radius)
+        iteration = self.common_step_counter // self.cfg.num_steps_per_env
         if self.cfg.ee_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.ee_pos_radius = max(self.cfg.ee_pos_radius_start * (0.5 ** (total_timesteps // self.cfg.ee_pos_radius_curriculum)), 1e-8)
+            self.ee_pos_radius = max(self.cfg.ee_pos_radius_start * (0.5 ** (iteration // self.cfg.ee_pos_radius_curriculum)), 0.01)
         if self.cfg.body_pos_radius_curriculum > 0:
             # half the pos radius every pos_radius_curriculum timesteps
-            self.body_pos_radius = max(self.cfg.body_pos_radius_start * (0.5 ** (total_timesteps // self.cfg.body_pos_radius_curriculum)), 1e-8)
+            self.body_pos_radius = max(self.cfg.body_pos_radius_start * (0.5 ** (iteration // self.cfg.body_pos_radius_curriculum)), 0.1)
         if self.cfg.ori_radius_curriculum > 0:
-            self.ori_radius = max(self.cfg.ori_radius_start * (0.5 ** (total_timesteps // self.cfg.ori_radius_curriculum)), 1e-8)
+            self.ori_radius = max(self.cfg.ori_radius_start * (0.5 ** (iteration // self.cfg.ori_radius_curriculum)), 0.1)
         if self.cfg.yaw_radius_curriculum > 0:
-            self.yaw_radius = max(self.cfg.yaw_radius_start * (0.5 ** (total_timesteps // self.cfg.yaw_radius_curriculum)), 1e-8)
+            self.yaw_radius = max(self.cfg.yaw_radius_start * (0.5 ** (iteration // self.cfg.yaw_radius_curriculum)), 0.1)
         if self.cfg.shoulder_radius_curriculum > 0:
-            self.shoulder_radius = max(self.cfg.shoulder_radius_start * (0.5 ** (total_timesteps // self.cfg.shoulder_radius_curriculum)), 1e-8)
+            self.shoulder_radius = max(self.cfg.shoulder_radius_start * (0.5 ** (iteration // self.cfg.shoulder_radius_curriculum)), 0.1)
         if self.cfg.wrist_radius_curriculum > 0:
-            self.wrist_radius = max(self.cfg.wrist_radius_start * (0.5 ** (total_timesteps // self.cfg.wrist_radius_curriculum)), 1e-8)
+            self.wrist_radius = max(self.cfg.wrist_radius_start * (0.5 ** (iteration // self.cfg.wrist_radius_curriculum)), 0.1)
 
 
     def _get_observations(self) -> torch.Dict[str, torch.Tensor | torch.Dict[str, torch.Tensor]]:
@@ -563,7 +611,7 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         Returns the observation dictionary. Policy observations are in the key "policy", critic
         in key "critic"
         """
-        self._apply_curriculum(self.common_step_counter * self.num_envs)
+        self._apply_curriculum()
 
         # Get EE frame info
         base_pos_w, base_ori_w, lin_vel_w, ang_vel_w = self.get_frame_state_from_task(self.cfg.task_body)
@@ -583,6 +631,10 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
 
         goal_pos_body, _ = subtract_frame_transforms(body_pos_w, body_ori_w,
                                                           goal_pos_w, body_ori_w)
+
+        goal_to_body_pos, goal_to_body_ori = subtract_frame_transforms(body_pos_w, body_ori_w, goal_pos_w, goal_ori_w)
+        # end effector to body transfrom
+        ee_to_body_pos, ee_to_body_ori = subtract_frame_transforms(body_pos_w, body_ori_w, base_pos_w, base_ori_w)
         body_roll, body_pitch, _ = euler_xyz_from_quat(body_ori_w)
 
         yaw_error, shoulder_error, wrist_error = aerial_manipulator_angle_errors(base_ori_w, goal_ori_w)
@@ -608,10 +660,12 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
             ori_representation_b = matrix_from_quat(ori_error_b).flatten(-2, -1)
             body_ori_representation = matrix_from_quat(body_ori_w).flatten(-2, -1)
             body_ori_error_b = matrix_from_euler(body_ori_error_b, convention="XYZ").flatten(-2, -1)
+            ee_to_body_ori_representation = matrix_from_quat(ee_to_body_ori).flatten(-2, -1)
         else:
             ori_representation_b = ori_error_b
             body_ori_representation = body_ori_w
             body_ori_error_b = quat_from_euler_xyz(body_roll, body_pitch, yaw_error.squeeze())
+            ee_to_body_ori_representation = ee_to_body_ori
 
         # Compute the joint states
         shoulder_joint_pos = torch.zeros(self.num_envs, 0, device=self.device)
@@ -633,49 +687,70 @@ class AerialManipulatorHoverEnv(DirectRLEnv):
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
+                # ori_error_b,                                # (num_envs, 3) [6-8]
                 ori_representation_b,                     # (num_envs, 0) if not using full ori matrix, (num_envs, 9)
-                # goal_pos_body,
-                body_pos_error,
-                # body_ori_error_b,
-                body_ori_representation,
-                grav_vector_b,
+                # yaw_error,
+                # shoulder_error,
+                # wrist_error,
+                # body_pos_error,                             # (num_envs, 3) [3-5]
+                goal_to_body_pos,
+                # body_ori_representation,                                 # (num_envs, 4) [6-9]
+                # goal_to_body_ori_representation,
+                ee_to_body_ori_representation,
+                # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise (0 for 2DOF)
+                # goal_ori_w_flattened_matrix,                # [12-20]
+                grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise [21-23]
                 lin_vel_b,                                  # (num_envs, 3) [24-26]
                 ang_vel_b,                                  # (num_envs, 3) [27-29]
-                # wrist_error,
-                # shoulder_embeddings,
-                # wrist_embeddings,
-                shoulder_joint_pos,
-                wrist_joint_pos,
-                shoulder_joint_vel,
-                wrist_joint_vel,
+                # body_lin_vel_b,
+                body_ang_vel_b,
+                # wrist_error,                                # (num_envs, 1) [31]
+                # shoulder_joint_pos,                         # (num_envs, 1) [30]
+                # wrist_joint_pos,                            # (num_envs, 1) [34]
+                # shoulder_joint_pos_embedding,
+                # wrist_joint_pos_embedding,
+                # wrist_error,  
+                shoulder_joint_vel,                         # (num_envs, 1) [32]
+                wrist_joint_vel,                            # (num_envs, 1) [33]
+                # shoulder_vel_error,
+                # wrist_vel_error,
                 self._previous_actions,
+                # future_body_pos_error_b.flatten(-2, -1),     # (num_envs, horizon * 3)
             ],
-            dim=-1                                          
+            dim=-1                                          # (num_envs, 22 + 7*horizon + 3*horizon)
         )
 
-        # additional critic observations for 2DOF case
-        critic_obs = torch.clone(obs)
+        # Additional critic observations
         if self.cfg.num_joints == 2:
-            
-            critic_obs = torch.cat (
+            # critic_obs = obs
+            critic_obs = torch.cat(
                 [
-                    pos_error_b,                                # (num_envs, 3) [0-2]
-                    ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
+                    obs,
+                    # pos_error_b,                                # (num_envs, 3) [0-2]
+                    # ori_representation_b,                       # (num_envs, 0) if not using full ori matrix, (num_envs, 9) if using full ori matrix
+                    # com_pos_error,
                     body_pos_error,
-                    body_ori_representation,
+                    # body_ori_representation,
                     # body_ori_error_b,
-                    grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
-                    # grav_vector_b_body,
-                    lin_vel_b,                                  # (num_envs, 3)
-                    ang_vel_b,                                  # (num_envs, 3)
+                    # yaw_representation,                         # (num_envs, 4) if using yaw representation (quat), 0 otherwise
+                    # grav_vector_b,                              # (num_envs, 3) if using gravity vector, 0 otherwise
+                    # lin_vel_b,                                  # (num_envs, 3)
+                    # ang_vel_b,                                  # (num_envs, 3)
                     body_lin_vel_b,
-                    body_ang_vel_b,                    
+                    # body_ang_vel_b,                    
+                    # shoulder_joint_pos,                         # (num_envs, 1)
+                    # wrist_joint_pos,                            # (num_envs, 1)
+                    # shoulder_joint_pos_embedding,
+                    # wrist_joint_pos_embedding,
+                    # yaw_error,
+                    # shoulder_error,
                     # wrist_error,
-                    shoulder_joint_pos,
-                    wrist_joint_pos,
-                    shoulder_joint_vel,
-                    wrist_joint_vel,  
-                    self._previous_actions,
+                    # shoulder_joint_vel,                         # (num_envs, 1)
+                    # wrist_joint_vel,
+                    # previous_actions,
+                    # future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
+                    # future_ori_error_b.flatten(-2, -1),          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                    # future_com_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
                 ],
                 dim=-1
             )

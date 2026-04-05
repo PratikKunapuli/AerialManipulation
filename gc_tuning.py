@@ -36,9 +36,9 @@ app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
 from isaaclab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
-from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
+from isaaclab_tasks.utils.hydra import hydra_task_config
 
-from omni.isaac.lab_tasks.utils import parse_env_cfg
+from isaaclab_tasks.utils import parse_env_cfg
 import gymnasium as gym
 import torch
 # from envs.hover import hover_env
@@ -57,70 +57,72 @@ use_feed_forward_terms = False
 def eval_trial(trial):
     obs_dict, info = env.reset()
     # Get mass from env
-    vehicle_mass = env.vehicle_mass # this is pulled from the body "vehicle" in the USD file
-    # vehicle_mass = torch.tensor([0.706028], device=env.device)
-    arm_mass = env.arm_mass 
+    robot_env = env.env
+    vehicle_mass = robot_env.vehicle_mass # this is pulled from the body "vehicle" in the USD file
+    # vehicle_mass = torch.tensor([0.706028], device=robot_env.device)
+    arm_mass = robot_env.arm_mass 
     # arm_mass = env.arm_mass - vehicle_mass
-    inertia =  env.quad_inertia
-    arm_offset = env.arm_offset
-    pos_offset = env.position_offset
-    ori_offset = env.orientation_offset
+    inertia =  robot_env.quad_inertia
+    arm_offset = robot_env.arm_offset
+    pos_offset = robot_env.position_offset
+    ori_offset = robot_env.orientation_offset
     steps = 0
     terminated_count = 0
 
-    pos_kp_gain_xy = trial.suggest_float("kp_pos_gain_xy", 0.0, 10.0)
-    pos_kp_gain_z = trial.suggest_float("kp_pos_gain_z", 0.0, 10.0)
-    pos_kd_gain_xy = trial.suggest_float("kd_pos_gain_xy", 0.0, 10.0)
-    pos_kd_gain_z = trial.suggest_float("kd_pos_gain_z", 0.0, 10.0)
-    ori_kp_gain_xy = trial.suggest_float("kp_att_gain_xy", 0.0, 30.0)
-    ori_kp_gain_z = trial.suggest_float("kp_att_gain_z", 0.0, 20.0)
-    ori_kd_gain_xy = trial.suggest_float("kd_att_gain_xy", 0.0, 15.0)
-    ori_kd_gain_z = trial.suggest_float("kd_att_gain_z", 0.0, 10.0)
+    pos_kp_gain_xy = trial.suggest_float("kp_pos_gain_xy", 1.0, 10.0)
+    pos_kp_gain_z = trial.suggest_float("kp_pos_gain_z", 5.0, 15.0)
+    pos_kd_gain_xy = trial.suggest_float("kd_pos_gain_xy", 1.0, 10.0)
+    pos_kd_gain_z = trial.suggest_float("kd_pos_gain_z", 2.0, 8.0)
+    ori_kp_gain_xy = trial.suggest_float("kp_att_gain_xy", 100.0, 300.0)
+    ori_kp_gain_z = trial.suggest_float("kp_att_gain_z", 1.0, 20.0)
+    ori_kd_gain_xy = trial.suggest_float("kd_att_gain_xy", 10.0, 20.0)
+    ori_kd_gain_z = trial.suggest_float("kd_att_gain_z", 1.0, 15.0)
 
     if "2DOF" in args_cli.task:
-        kp_shoulder_gain = trial.suggest_float("kp_shoulder_gain", 0.0, 10.0)
-        kd_shoulder_gain = trial.suggest_float("kd_shoulder_gain", 0.0, 10.0)
-        ki_shoulder_gain = trial.suggest_float("ki_shoulder_gain", 0.0, 0.0)
-        kp_wrist_gain = trial.suggest_float("kp_wrist_gain", 0.0, 10.0)
+        kp_shoulder_gain = trial.suggest_float("kp_shoulder_gain", 60.0, 80.0)
+        kd_shoulder_gain = trial.suggest_float("kd_shoulder_gain", 30.0, 50.0)
+        ki_shoulder_gain = trial.suggest_float("ki_shoulder_gain", 0.0, 10.0)
+        kp_wrist_gain = trial.suggest_float("kp_wrist_gain", 0.0, 20.0)
         kd_wrist_gain = trial.suggest_float("kd_wrist_gain", 0.0, 10.0)
-        ki_wrist_gain = trial.suggest_float("ki_wrist_gain", 0.0, 0.0)
+        ki_wrist_gain = trial.suggest_float("ki_wrist_gain", 0.0, 5.0)
 
     if use_integral_terms:
-        pos_ki_gain_xy = trial.suggest_float("pos_ki_gain_xy", 0.0, 20.0)
-        pos_ki_gain_z = trial.suggest_float("pos_ki_gain_z", 0.0, 20.0)
-        ori_ki_gain_xy = trial.suggest_float("ori_ki_gain_xy", 0.0, 200.0)
-        ori_ki_gain_z = trial.suggest_float("ori_ki_gain_z", 0.0, 10.0)
+        pos_ki_gain_xy = trial.suggest_float("pos_ki_gain_xy", 0.0, 5.0)
+        pos_ki_gain_z = trial.suggest_float("pos_ki_gain_z", 0.0, 5.0)
+        ori_ki_gain_xy = trial.suggest_float("ori_ki_gain_xy", 0.0, 0.0)
+        ori_ki_gain_z = trial.suggest_float("ori_ki_gain_z", 0.0, 0.0)
 
-    rewards = torch.zeros(args_cli.num_envs, device=env.device)
+    rewards = torch.zeros(args_cli.num_envs, device=robot_env.device)
 
 
     if "2DOF" not in args_cli.task:
         if "Traj" in args_cli.task:
             if not use_integral_terms:
-                gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+                gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=robot_env.device,
                                         kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
                                         kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
                                         tuning_mode=False, feed_forward=use_feed_forward_terms)
             else:
-                gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+                gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=robot_env.device,
                                         kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
                                         kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
                                         ki_pos_gain_xy=pos_ki_gain_xy, ki_pos_gain_z=pos_ki_gain_z, ki_att_gain_xy=ori_ki_gain_xy, ki_att_gain_z=ori_ki_gain_z,
                                         tuning_mode=False, feed_forward=False, use_integral=True)
         else:
-            gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+            gc = DecoupledController(args_cli.num_envs, 0, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=robot_env.device,
                                     kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
                                     kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
                                     tuning_mode=False)
     else:
-        arm_inertia = env.arm_inertia
-        arm_length = env.arm_length
-        gc = DecoupledController(args_cli.num_envs, 2, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=env.device,
+        arm_inertia = robot_env.arm_inertia
+        arm_length = robot_env.arm_length
+        urdf_path = "../models/uam_2dof_ee_mass_pin.urdf"
+        gc = DecoupledController(args_cli.num_envs, 2, vehicle_mass, arm_mass, inertia, arm_offset, ori_offset, print_debug=False, com_pos_w=None, device=robot_env.device,
                                 kp_pos_gain_xy=pos_kp_gain_xy, kp_pos_gain_z=pos_kp_gain_z, kd_pos_gain_xy=pos_kd_gain_xy, kd_pos_gain_z=pos_kd_gain_z,
                                 kp_att_gain_xy=ori_kp_gain_xy, kp_att_gain_z=ori_kp_gain_z, kd_att_gain_xy=ori_kd_gain_xy, kd_att_gain_z=ori_kd_gain_z,
                                 kp_shoulder_gain=kp_shoulder_gain, kd_shoulder_gain=kd_shoulder_gain, ki_shoulder_gain=ki_shoulder_gain,
                                 kp_wrist_gain=kp_wrist_gain, kd_wrist_gain=kd_wrist_gain, ki_wrist_gain=ki_wrist_gain,
-                                arm_inertia=arm_inertia, arm_length=arm_length, tuning_mode=False)
+                                arm_inertia=arm_inertia, arm_length=arm_length, tuning_mode=False, use_com_control=True, urdf_path=urdf_path)
 
 
     while steps < 500:
@@ -178,11 +180,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     env_cfg.goal_body = "endeffector"
 
     # Reward shaping
-    # env_cfg.pos_radius = 0.1
-    # env_cfg.pos_distance_reward_scale = 0.0
-    # env_cfg.pos_error_reward_scale = -2.0
-    # env_cfg.yaw_error = -2.0
-    # env_cfg.yaw_smooth_transition_scale = 0.0
+    env_cfg.body_pos_radius_curriculum = 0
+    env_cfg.ee_pos_radius_curriculum = 0
+    env_cfg.ori_radius_curriculum = 0
 
 
     global env

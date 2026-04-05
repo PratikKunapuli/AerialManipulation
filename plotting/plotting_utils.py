@@ -10,8 +10,8 @@ params = {
     "quad_ori_slice" : slice(3,7),
     "ee_pos_slice" : slice(13,16),
     "ee_ori_slice" : slice(16,20),
-    "goal_pos_slice" : slice(26,29),
-    "goal_ori_slice" : slice(29,33),
+    "goal_pos_slice" : slice(30,33),
+    "goal_ori_slice" : slice(33,37),
 
     # Colors
     "rl_ee_color": "#56B4E9",
@@ -46,9 +46,14 @@ def get_error_bars_from_quantiles(quantiles):
 def get_errors(data):
     N = data.shape[0]
     T = data.shape[1]-1
+    # print(data.shape)
 
     pos_error = torch.norm(data[:, :T, params["goal_pos_slice"]] - data[:, :T, params["ee_pos_slice"]], dim=-1)
     yaw_error = isaac_math_utils.quat_error_magnitude(data[:,:T,params["goal_ori_slice"]], data[:,:T,params["ee_ori_slice"]])
+    print("best ori error end idx: ", yaw_error[:,-1].argmin())
+    print("worst ori error end idx: ", yaw_error[:,-1].argmax())
+    # worst = yaw_error[:,-1].argmax()
+    # print(yaw_error[worst])
 
     return pos_error, yaw_error
 
