@@ -88,6 +88,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # agent_cfg: RslRlOnPolicyRunnerCfg = cli_args.parse_rsl_rl_cfg(args_cli.task, args_cli)
     agent_cfg = cli_args.update_rsl_rl_cfg(agent_cfg, args_cli)
     env_cfg.scene.num_envs = args_cli.num_envs if args_cli.num_envs is not None else env_cfg.scene.num_envs
+    env_cfg.episode_length_s = args_cli.video_length * 0.02 # prevent timeout resets
 
     # specify directory for logging experiments
     log_root_path = os.path.join("logs", "rsl_rl", agent_cfg.experiment_name)
@@ -316,7 +317,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # env_cfg.goal_yaw_range = 0.0 #0.0 1.5708  3.14159
 
 
-    envs = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array")
+    envs = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
+    eval_trajectory_prefix = "" if env_cfg.eval_trajectory is None else f"_eval_trajectory_{env_cfg.eval_trajectory}"
 
     save_prefix = args_cli.save_prefix
     if args_cli.case_study:
@@ -326,7 +328,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
         save_prefix += "ball_catch_"
 
     if "Traj" in args_cli.task:
-        save_prefix += "eval_traj_track_" + str(int(1/env_cfg.traj_update_dt)) + "Hz_"
+        save_prefix += "eval_traj_track_" + str(int(1/env_cfg.traj_update_dt)) + "Hz_" + eval_trajectory_prefix + f"_{args_cli.num_envs}_envs_"
 
     
     # save_prefix = "ball_catch_side_view_"
@@ -335,8 +337,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     else:
         viz_mode = ""
 
-    eval_trajectory_prefix = "" if env_cfg.eval_trajectory is None else f"_eval_trajectory_{env_cfg.eval_trajectory}"
-    video_name = save_prefix + "_eval_video" + robot_index_prefix + "_viz_" + viz_mode + eval_trajectory_prefix
+    video_name = save_prefix + "_eval_video" + robot_index_prefix + "_viz_" + viz_mode
     if args_cli.baseline:
         video_folder_path = f"{policy_path}"
     else:
@@ -349,12 +350,16 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
         "video_length": args_cli.video_length,
         "name_prefix": video_name
     }
-    envs = gym.wrappers.RecordVideo(envs, **video_kwargs)
+    if args_cli.video:
+        envs = gym.wrappers.RecordVideo(envs, **video_kwargs)
     device = envs.unwrapped.device
 
 
     if args_cli.baseline:
-        robot_env = envs.env.env
+        if args_cli.video:
+            robot_env = envs.env.env
+        else:
+            robot_env = envs.env
         vehicle_mass = robot_env.vehicle_mass
         arm_mass = robot_env.arm_mass
         inertia =  robot_env.quad_inertia
@@ -449,8 +454,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # import code; code.interact(local=locals())
 
     full_state_size = obs_dict["full_state"].shape[1]
-    full_states = torch.zeros((args_cli.num_envs, 500, full_state_size), dtype=torch.float32).to(device)
-    rewards = torch.zeros((args_cli.num_envs, 500), dtype=torch.float32).to(device)
+    full_states = torch.zeros((args_cli.num_envs, args_cli.video_length, full_state_size), dtype=torch.float32).to(device)
+    rewards = torch.zeros((args_cli.num_envs, args_cli.video_length), dtype=torch.float32).to(device)
 
 
     steps = 0
@@ -460,7 +465,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
     # input("Press Enter to continue...")
     with torch.no_grad():
         while simulation_app.is_running():
-            while steps < 500 and not done:
+            while steps < args_cli.video_length and not done:
                 obs_tensor = obs_dict["policy"]
                 full_states[:, steps, :] = obs_dict["full_state"]
                 # print("Full State: ", obs_dict["full_state"][0, 33:])
