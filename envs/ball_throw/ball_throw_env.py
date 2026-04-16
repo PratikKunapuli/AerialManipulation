@@ -16,6 +16,9 @@ from __future__ import annotations
 
 import torch
 
+from isaaclab.sim.utils import get_current_stage
+from pxr import Gf, UsdShade
+
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg, RigidObject, RigidObjectCfg
 from isaaclab.scene import InteractiveSceneCfg
@@ -171,7 +174,7 @@ class BallThrowEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     hoop_pos_range = [1.0, 1.0, 0.5]
 
     # Ball release time in seconds
-    ball_release_time = 3.0
+    ball_release_time = 5.0
 
     # Ball mass added to the EE link while attached (kg)
     ball_mass = 0.1
@@ -271,25 +274,22 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         # hover_pos_shifted[:, :2] += self._terrain.env_origins[:, :2]
 
         # Iteration 1: follow linear path to target position over hoop
-        arrive_time = self.cfg.ball_release_time - 0.5
-        arrive_step = int(arrive_time * self.cfg.policy_rate_hz)
-        moving_mask = (self.episode_length_buf <= arrive_step)
-        hover_mask = ~moving_mask
+        T = 1 + self.cfg.trajectory_horizon
+        arrive_time = self.cfg.ball_release_time - 1.5
         curr_time = self.episode_length_buf.unsqueeze(-1)
-        future_timesteps = torch.arange(0, 1+self.cfg.trajectory_horizon, device=self.device)
+        future_timesteps = torch.arange(0, T, device=self.device)
         time = (curr_time + future_timesteps.unsqueeze(0)) * self.cfg.traj_update_dt
-        slopes = (hover_pos_shifted - self.init_ee_pos) / arrive_time
-        target_pos = self.init_ee_pos.unsqueeze(-1) + slopes.unsqueeze(-1) * time.unsqueeze(1)
+        slopes = (hover_pos_shifted.unsqueeze(-1).tile(1, 1, T) - self.init_ee_pos.unsqueeze(-1).tile(1, 1, T)) / arrive_time
+        target_pos = self.init_ee_pos.unsqueeze(-1) + slopes * time.unsqueeze(1)
+        motion_mask = (time <= arrive_time).unsqueeze(1).tile(1, 3, 1) # mask on future timesteps to send observation
+        target_pos = torch.where(motion_mask, target_pos, hover_pos_shifted.unsqueeze(-1).tile(1, 1, T))
+        slopes = torch.where(motion_mask, slopes, torch.zeros_like(slopes))
 
         # Current goal and full horizon: constant hover position, identity orientation
-        self._desired_pos_w[hover_mask] = hover_pos_shifted[hover_mask]
-        self._desired_pos_w[moving_mask] = target_pos[moving_mask, :, 0]
+        self._desired_pos_w[ids] = target_pos[ids, :, 0]
         self._desired_ori_w[ids] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device)
 
-        self._desired_pos_traj_w[hover_mask] = hover_pos_shifted[hover_mask].unsqueeze(1).expand(
-            -1, 1 + self.cfg.trajectory_horizon, -1
-        )
-        self._desired_pos_traj_w[moving_mask] = target_pos[moving_mask].transpose(1,2)
+        self._desired_pos_traj_w[ids] = target_pos[ids, :, :].transpose(1,2)
         self._desired_ori_traj_w[ids] = torch.tensor(
             [1.0, 0.0, 0.0, 0.0], device=self.device
         ).expand(len(ids), 1 + self.cfg.trajectory_horizon, -1)
@@ -299,13 +299,8 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         # _pos_traj shape: (5, num_envs, 3, 1+horizon)
         # _roll/pitch/yaw_traj shape: (5, num_envs, 1+horizon)
         self._pos_traj[:, ids] = 0.0
-        self._pos_traj[0, hover_mask] = hover_pos_shifted[hover_mask].unsqueeze(-1).tile(
-            1, 1, 1 + self.cfg.trajectory_horizon
-        )
-        self._pos_traj[0, moving_mask] = target_pos[moving_mask]
-        self._pos_traj[1, moving_mask] = slopes[moving_mask].unsqueeze(2).expand(
-            -1, -1, 1 + self.cfg.trajectory_horizon
-        ) # reference trajectory velocity
+        self._pos_traj[0, ids] = target_pos[ids]
+        self._pos_traj[1, ids] = slopes[ids]
 
         self._roll_traj[:, ids] = 0.0
         self._pitch_traj[:, ids] = 0.0
@@ -406,6 +401,36 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
             ball_vel[:, 3:] = ee_ang_vel[attached_ids]
             self._throw_ball.write_root_velocity_to_sim(ball_vel, env_ids=attached_ids)
 
+    def set_hoop_color(self, env_ids: torch.Tensor, color: tuple[float, float, float]):
+        """Set the hoop ring's PreviewSurface diffuse color for selected envs."""
+        if env_ids is None or env_ids.numel() == 0:
+            return
+
+        # Shapes spawner typically creates: <prim>/geometry/material/Shader
+        # but we keep a small set of fallbacks to be robust to USD layout changes.
+        for env_id in env_ids:
+            base = f"/World/envs/env_{env_id.item()}/HoopRing"
+            candidate_shader_paths = (
+                f"{base}/geometry/material/Shader",
+                f"{base}/geometry/material/shader/Shader",
+                f"{base}/geometry/material/PreviewSurface",
+                f"{base}/Looks/Material/Shader",
+                f"{base}/Looks/Material/previewShader",
+            )
+            shader_prim = None
+            for prim_path in candidate_shader_paths:
+                prim = get_current_stage().GetPrimAtPath(prim_path)
+                if prim:
+                    shader_prim = prim
+                    break
+
+            if shader_prim is None:
+                continue
+
+            shader = UsdShade.Shader(shader_prim)
+            if shader:
+                shader.GetInput("diffuseColor").Set(Gf.Vec3f(color))
+
     # ------------------------------------------------------------------
     # Rewards – binary hoop score only
     # ------------------------------------------------------------------
@@ -417,13 +442,15 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         )
         ball_height_diff = (ball_pos[:, 2] - self._hoop_pos[:, 2]).abs()
 
-        hoop_radius = 0.25
+        hoop_radius = HOOP_RING_CFG.spawn.radius
         through_hoop = (
             self._ball_released
             & ~self._ball_passed_through_hoop
             & (ball_to_hoop_xy < hoop_radius)
             & (ball_height_diff < 0.15)
         )
+        if through_hoop.any():
+            self.set_hoop_color(through_hoop.nonzero(as_tuple=False).squeeze(-1), (0.0, 1.0, 0.0))
         self._ball_passed_through_hoop = self._ball_passed_through_hoop | through_hoop
 
         reward = through_hoop.float() * self.cfg.ball_through_hoop_reward
@@ -458,6 +485,9 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         self._ball_released[env_ids] = False
         self._ball_passed_through_hoop[env_ids] = False
         self._ball_throw_episode_sums["ball_through_hoop"][env_ids] = 0.0
+
+        # Restore hoop ring color to default (red) on reset.
+        self.set_hoop_color(env_ids, (0.9, 0.1, 0.1))
 
         # --- EE mass bookkeeping ---
         # BallThrowEventCfg zeros the EE mass at startup.  On each reset we
