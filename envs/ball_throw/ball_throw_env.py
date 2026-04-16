@@ -231,6 +231,8 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
             "ball_through_hoop": torch.zeros(self.num_envs, dtype=torch.float, device=self.device),
         }
 
+        self.init_ee_pos = torch.zeros(self.num_envs, 3, device=self.device)
+
     # ------------------------------------------------------------------
     # Scene: add ball + hoop on top of parent scene
     # ------------------------------------------------------------------
@@ -268,13 +270,26 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         hover_pos_shifted[:, 2] += 1.0
         # hover_pos_shifted[:, :2] += self._terrain.env_origins[:, :2]
 
+        # Iteration 1: follow linear path to target position over hoop
+        arrive_time = self.cfg.ball_release_time - 0.5
+        arrive_step = int(arrive_time * self.cfg.policy_rate_hz)
+        moving_mask = (self.episode_length_buf <= arrive_step)
+        hover_mask = ~moving_mask
+        curr_time = self.episode_length_buf.unsqueeze(-1)
+        future_timesteps = torch.arange(0, 1+self.cfg.trajectory_horizon, device=self.device)
+        time = (curr_time + future_timesteps.unsqueeze(0)) * self.cfg.traj_update_dt
+        slopes = (hover_pos_shifted - self.init_ee_pos) / arrive_time
+        target_pos = self.init_ee_pos.unsqueeze(-1) + slopes.unsqueeze(-1) * time.unsqueeze(1)
+
         # Current goal and full horizon: constant hover position, identity orientation
-        self._desired_pos_w[ids] = hover_pos_shifted[ids]
+        self._desired_pos_w[hover_mask] = hover_pos_shifted[hover_mask]
+        self._desired_pos_w[moving_mask] = target_pos[moving_mask, :, 0]
         self._desired_ori_w[ids] = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device)
 
-        self._desired_pos_traj_w[ids] = hover_pos_shifted[ids].unsqueeze(1).expand(
+        self._desired_pos_traj_w[hover_mask] = hover_pos_shifted[hover_mask].unsqueeze(1).expand(
             -1, 1 + self.cfg.trajectory_horizon, -1
         )
+        self._desired_pos_traj_w[moving_mask] = target_pos[moving_mask].transpose(1,2)
         self._desired_ori_traj_w[ids] = torch.tensor(
             [1.0, 0.0, 0.0, 0.0], device=self.device
         ).expand(len(ids), 1 + self.cfg.trajectory_horizon, -1)
@@ -284,9 +299,14 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         # _pos_traj shape: (5, num_envs, 3, 1+horizon)
         # _roll/pitch/yaw_traj shape: (5, num_envs, 1+horizon)
         self._pos_traj[:, ids] = 0.0
-        self._pos_traj[0, ids] = hover_pos_shifted[ids].unsqueeze(2).expand(
-            -1, -1, 1 + self.cfg.trajectory_horizon
+        self._pos_traj[0, hover_mask] = hover_pos_shifted[hover_mask].unsqueeze(-1).tile(
+            1, 1, 1 + self.cfg.trajectory_horizon
         )
+        self._pos_traj[0, moving_mask] = target_pos[moving_mask]
+        self._pos_traj[1, moving_mask] = slopes[moving_mask].unsqueeze(2).expand(
+            -1, -1, 1 + self.cfg.trajectory_horizon
+        ) # reference trajectory velocity
+
         self._roll_traj[:, ids] = 0.0
         self._pitch_traj[:, ids] = 0.0
         self._yaw_traj[:, ids] = 0.0
@@ -490,3 +510,5 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         self._throw_ball.write_root_velocity_to_sim(
             ball_state[:, 7:13], env_ids=env_ids
         )
+
+        self.init_ee_pos[env_ids] = ee_pos[env_ids]
