@@ -1899,7 +1899,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # desired_joint_angles = torch.stack([init_shoulder.squeeze(1), init_wrist.squeeze(1)], dim=1)
         # default_root_state[:, 3:7] = math_utils.quat_from_yaw(init_yaw.squeeze(1))
         # default_root_state[:, 7:10] = self._pos_traj[1, env_ids, :, 0]
-        default_root_state[:, -1] = self._yaw_traj[1, env_ids, 0] # set the body yaw velocity to the desired yaw velocity
+        # default_root_state[:, -1] = self._yaw_traj[1, env_ids, 0] # set the body yaw velocity to the desired yaw velocity
         # desired_joint_vel = torch.stack([self._roll_traj[1, env_ids, 0], self._pitch_traj[1, env_ids, 0]], dim=1) # set the joint velocites to the desired angular velocities (is approximate)
         desired_joint_vel = torch.zeros(len(env_ids), 2, device=self.device)
         if self.cfg.init_cfg == "rand":
