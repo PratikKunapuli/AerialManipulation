@@ -185,7 +185,7 @@ class BallThrowEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     
 
     # Trajectory parameters for phase 1: polynomial trajectory to a common point next to the hoop
-    hoop_hover_offset = [4.0, 0.0, 1.0]
+    hoop_hover_offset = [0.0, -4.0, 1.0]
     hoop_hover_time = 3.0
     polynomial_degree = 3
     hoop_hover_yaw_angle = -np.pi/2
@@ -195,11 +195,11 @@ class BallThrowEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # Phase 2 (throwing trajectory)
     # Ball release time in seconds
     ball_release_time = 6.0
-    hoop_throw_offset = [2.0, 0.0, 2.0] # drone pos relative to hoop
+    hoop_throw_offset = [2.0, -2.0, 2.0] # drone pos relative to hoop
     throw_yaw_angle = -np.pi/2
     throw_shoulder_angle = 2*np.pi/3
     throw_wrist_angle = 0.0
-    throw_vel_drone = [-1.0, 0.0, 0.0]
+    throw_vel_drone = [0.0, 0.0, 0.0]
     throw_vel_yaw = 0.0
     throw_vel_shoulder = 3.0
     throw_vel_wrist = 0.0
@@ -294,8 +294,8 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         self.hover_pos_drone_end = torch.zeros(self.num_envs, 3, device=self.device)
         self.in_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
-        # Pre-calculate some useful quantities for the throwing part - determine the drone velocity needed to hit the target,
-        # given that the constants will be the release point and vertical velocity of the ball (desired) at release
+        # Pre-calculate some useful quantities for the throwing part - determine where the height of the drone and shoulder joint
+        # velocity needed at the end of the throwing stage, given a desired drone velocity, horizontal distance to the hoop, and shoulder angle 
         ball_throw_z = self.cfg.hoop_throw_offset[2] + self.arm_length * np.sin(self.cfg.throw_shoulder_angle)
         s = abs(np.sin(self.cfg.throw_shoulder_angle))
         c = abs(np.cos(self.cfg.throw_shoulder_angle))
@@ -307,6 +307,10 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
 
         vx_needed = -self.cfg.hoop_throw_offset[0] / ball_fall_time  - vx_throw # negative sign because throwing towards hoop coming from positive x
         self.cfg.throw_vel_drone[0] = vx_needed
+
+        # in case of a y-offset:
+        vy_needed = -self.cfg.hoop_throw_offset[1] / ball_fall_time
+        self.cfg.throw_vel_drone[1] = vy_needed
 
     # ------------------------------------------------------------------
     # Scene: add ball + hoop on top of parent scene
