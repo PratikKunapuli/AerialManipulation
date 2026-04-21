@@ -210,7 +210,7 @@ class BallThrowEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     follow_through_time = ball_release_time + 2.0
     follow_through_offset = [0.0, 2.0, 2.0] # drone pos specified
     follow_through_yaw_angle = 0.0
-    follow_through_shoulder_angle = -np.pi/2
+    follow_through_shoulder_angle = -np.pi/2 + 2*np.pi
     follow_through_wrist_angle = 0.0
 
 
@@ -773,7 +773,7 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         B_mat[:, 0, 3] = self.cfg.throw_yaw_angle # initial yaw angle
         B_mat[:, -2, 3] = self.cfg.follow_through_yaw_angle # target yaw angle
 
-        B_mat[:, 0, 4] = wrap_to_pi(torch.tensor(self.cfg.throw_shoulder_angle, device=self.device)) # initial shoulder angle
+        B_mat[:, 0, 4] = (torch.tensor(self.cfg.throw_shoulder_angle, device=self.device)) # initial shoulder angle
         B_mat[:, -2, 4] = self.cfg.follow_through_shoulder_angle # target shoulder angle
         B_mat[:, 1, 4] = self.cfg.throw_vel_shoulder # joint angle throwing speed continuity
 
