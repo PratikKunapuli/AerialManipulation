@@ -36,7 +36,7 @@ from isaaclab.utils.math import (
 )
 
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_2DOF_CFG
-from utils.math_utilities import calculate_required_pos, yaw_from_quat
+from utils.math_utilities import calculate_required_pos, yaw_from_quat, quat_from_yaw
 
 from isaaclab.managers import EventTermCfg as EventTerm
 from isaaclab.managers import SceneEntityCfg
@@ -185,28 +185,30 @@ class BallThrowEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     
 
     # Trajectory parameters for phase 1: polynomial trajectory to a common point next to the hoop
-    hoop_hover_offset = [0.0, -4.0, 1.0]
-    hoop_hover_time = 3.0
+    hoop_hover_offset = [6.0, -2.0, 1.5]
+    hoop_hover_time = 2.0
     polynomial_degree = 3
-    hoop_hover_yaw_angle = -np.pi/2
-    hoop_hover_shoulder_angle = -np.pi/6
+    hoop_hover_yaw_angle = np.pi/2
+    hoop_hover_shoulder_angle = 1*np.pi/6
     hoop_hover_wrist_angle = 0.0
+    hoop_hover_vel = [0.0, 0.0, 0.0] # ee vel, will also be quad desired vel if no joint velocity
+    
 
     # Phase 2 (throwing trajectory)
     # Ball release time in seconds
-    ball_release_time = 6.0
-    hoop_throw_offset = [2.0, -2.0, 2.0] # drone pos relative to hoop
-    throw_yaw_angle = -np.pi/2
-    throw_shoulder_angle = 2*np.pi/3
+    ball_release_time = hoop_hover_time + 2.0
+    hoop_throw_offset = [2.0, 0.0, 2.0] # drone pos relative to hoop
+    throw_yaw_angle = np.pi/2
+    throw_shoulder_angle = -1*np.pi/6 + 1*2*np.pi
     throw_wrist_angle = 0.0
-    throw_vel_drone = [0.0, 0.0, 0.0]
+    throw_vel_drone = [0.0, 0.0, 0.0] # x and y components will be calculated, z can be set
     throw_vel_yaw = 0.0
     throw_vel_shoulder = 3.0
     throw_vel_wrist = 0.0
 
     # Phase 3 (follow through trajectory/come to stationary point)
-    follow_through_time = 8.0
-    follow_through_offset = [-1.0, 1.0, 1.0] # drone pos specified
+    follow_through_time = ball_release_time + 2.0
+    follow_through_offset = [0.0, 2.0, 2.0] # drone pos specified
     follow_through_yaw_angle = 0.0
     follow_through_shoulder_angle = -np.pi/2
     follow_through_wrist_angle = 0.0
@@ -218,7 +220,9 @@ class BallThrowEnvCfg(AerialManipulatorTrajectoryTrackingEnvBaseCfg):
     # Force eval mode so we get the full state logged
     eval_mode = True
     init_cfg = "rand"
-    init_pos_ranges=[2.0, 2.0, 0.5]
+    init_pos_ranges=[0.1, 0.1, 0.0]
+    init_yaw_ranges=[0.1]
+    init_joint_ranges =[0.1, 0.1]
 
     use_motor_dynamics = False
 
@@ -295,22 +299,26 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         self.in_reset = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
 
         # Pre-calculate some useful quantities for the throwing part - determine where the height of the drone and shoulder joint
-        # velocity needed at the end of the throwing stage, given a desired drone velocity, horizontal distance to the hoop, and shoulder angle 
+        # velocity needed at the end of the throwing stage, given a desired drone velocity, horizontal distance of drone to hoop, and shoulder angle 
+        ball_throw_x = self.cfg.hoop_throw_offset[0] - self.arm_length * np.cos(self.cfg.throw_shoulder_angle)
         ball_throw_z = self.cfg.hoop_throw_offset[2] + self.arm_length * np.sin(self.cfg.throw_shoulder_angle)
-        s = abs(np.sin(self.cfg.throw_shoulder_angle))
-        c = abs(np.cos(self.cfg.throw_shoulder_angle))
-        vz_throw = -self.arm_length * s * self.cfg.throw_vel_shoulder * np.sign(c)
-        vx_throw = -self.arm_length * c * self.cfg.throw_vel_shoulder * np.sign(s) # just the component from the angular velocity
+        s = np.sin(self.cfg.throw_shoulder_angle)
+        c = np.cos(self.cfg.throw_shoulder_angle)
+        vz_throw = self.arm_length * c * self.cfg.throw_vel_shoulder + self.cfg.throw_vel_drone[2]
+        vx_throw = self.arm_length * s * self.cfg.throw_vel_shoulder # just the component from the angular velocity
         g = abs(self.cfg.sim.gravity[2])
         ball_fall_time = (-vz_throw - (vz_throw**2 + 2*g*ball_throw_z)**0.5) / -g
-        print(f"vz_throw: {vz_throw}, vx_throw: {vx_throw}, ball_throw_z: {ball_throw_z}, g: {g}, ball_fall_time: {ball_fall_time}")
-
-        vx_needed = -self.cfg.hoop_throw_offset[0] / ball_fall_time  - vx_throw # negative sign because throwing towards hoop coming from positive x
+        vx_needed = -ball_throw_x / ball_fall_time - vx_throw # negative sign because throwing towards hoop coming from positive x
         self.cfg.throw_vel_drone[0] = vx_needed
 
         # in case of a y-offset:
         vy_needed = -self.cfg.hoop_throw_offset[1] / ball_fall_time
         self.cfg.throw_vel_drone[1] = vy_needed
+
+        print(
+            f"vz_throw: {vz_throw}, vx_throw: {vx_throw}, ball_throw_z: {ball_throw_z}, ball_throw_x: {ball_throw_x}, g: {g}, ball_fall_time: {ball_fall_time}, vx_needed: {vx_needed}, vy_needed: {vy_needed}"
+        )
+
 
     # ------------------------------------------------------------------
     # Scene: add ball + hoop on top of parent scene
@@ -493,8 +501,8 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
 
         # hack to set the robot's initial position to be relative to the env coordinate frame, required
         # since for init_cfg = "rand", the vehicle's starting position is a random offset w.r.t self._desired_body_pos
-        reset_idx = self.in_reset.nonzero(as_tuple=False).squeeze(-1)
-        self._desired_body_pos[reset_idx] = self._hoop_pos[reset_idx]
+        # reset_idx = self.in_reset.nonzero(as_tuple=False).squeeze(-1)
+        # self._desired_body_pos[reset_idx] = self._hoop_pos[reset_idx]
         # self._desired_body_pos[reset_idx, 2] += 0.5
 
     # ------------------------------------------------------------------
@@ -684,6 +692,7 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         B_mat = torch.zeros(N, degree + 1, 6, device=self.device) # 0 velocities at target position, and initial position if degree == 3
         B_mat[:, 0, :3] = self.init_ee_pos[env_ids] # initial position
         B_mat[:, -2, :3] = self.hoop_hover_pos[env_ids] # target position
+        B_mat[:, -1, :3] = torch.tensor(self.cfg.hoop_hover_vel, device=self.device).unsqueeze(0).tile(N, 1) # drone velocity
 
         B_mat[:, 0, 3] = self.init_quad_yaw[env_ids] # initial yaw
         B_mat[:, -2, 3] = self.cfg.hoop_hover_yaw_angle # target yaw
@@ -720,6 +729,7 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         B_mat = torch.zeros(N, degree + 1, 6, device=self.device) # 0 velocities at target position, and initial position if degree == 3
         B_mat[:, 0, :3] = self.hover_pos_drone_end[env_ids] # initial position
         B_mat[:, -2, :3] = self.hoop_throw_pos[env_ids] # target position
+        B_mat[:, 1, :3] = torch.tensor(self.cfg.hoop_hover_vel, device=self.device).unsqueeze(0).tile(N, 1) # drone velocity
         B_mat[:, -1, :3] = torch.tensor(self.cfg.throw_vel_drone, device=self.device).unsqueeze(0).tile(N, 1) # drone velocity
 
         B_mat[:, 0, 3] = self.cfg.hoop_hover_yaw_angle # initial yaw angle
@@ -763,13 +773,13 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         B_mat[:, 0, 3] = self.cfg.throw_yaw_angle # initial yaw angle
         B_mat[:, -2, 3] = self.cfg.follow_through_yaw_angle # target yaw angle
 
-        B_mat[:, 0, 4] = self.cfg.throw_shoulder_angle # initial shoulder angle
+        B_mat[:, 0, 4] = wrap_to_pi(torch.tensor(self.cfg.throw_shoulder_angle, device=self.device)) # initial shoulder angle
         B_mat[:, -2, 4] = self.cfg.follow_through_shoulder_angle # target shoulder angle
-        B_mat[:, -1, 4] = self.cfg.throw_vel_shoulder # joint angle throwing speed continuity
+        B_mat[:, 1, 4] = self.cfg.throw_vel_shoulder # joint angle throwing speed continuity
 
         B_mat[:, 0, 5] = self.cfg.throw_wrist_angle # initial wrist angle
         B_mat[:, -2, 5] = self.cfg.follow_through_wrist_angle # target wrist angle
-        B_mat[:, -1, 5] = self.cfg.throw_vel_wrist # joint angle throwing speed continuity
+        B_mat[:, 1, 5] = self.cfg.throw_vel_wrist # joint angle throwing speed continuity
         coeffs = torch.linalg.solve(A_mat, B_mat)
         self.poly_coefficients_follow_through[env_ids, 0] = coeffs[..., 0]
         self.poly_coefficients_follow_through[env_ids, 1] = coeffs[..., 1]
@@ -820,9 +830,20 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         )
 
         # Let the parent handle robot reset, trajectory init, logging, etc.
-        self.in_reset[env_ids] = True
+        # self.in_reset[env_ids] = True
         super()._reset_idx(env_ids)
-        self.in_reset[env_ids] = False
+        # self.in_reset[env_ids] = False
+
+        # Override the initial position so that parent reset only used for metrics and setting some physics properties (ee mass, motor speeds)
+        default_root_state = self._robot.data.default_root_state[env_ids].clone()
+        default_root_state[:, :3] = self._hoop_pos[env_ids] + torch.tensor([[6.0, 0.0, 0.2]], device=self.device)
+        if self.cfg.init_cfg == "rand":
+            pos_rand = (torch.rand(len(env_ids), 3, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_pos_ranges, device=self.device).float()
+            default_root_state[:, :3] = default_root_state[:, :3] + pos_rand
+            default_root_state[:, 2] -= 0.2
+            yaw_rand = (torch.rand(len(env_ids), 1, device=self.device) * 2.0 - 1.0) * torch.tensor(self.cfg.init_yaw_ranges, device=self.device).float()
+            default_root_state[:, 3:7] = quat_from_yaw(yaw_rand.squeeze(1))
+        self._robot.write_root_pose_to_sim(default_root_state[:, :7], env_ids=env_ids)
 
         # Merge our extras into the parent's log
         if "log" not in self.extras:
