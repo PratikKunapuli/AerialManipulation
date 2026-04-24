@@ -282,3 +282,99 @@ def eval_polynomial_curve(t: torch.Tensor, coeffs: torch.Tensor, derivatives: in
     yaw = full_data[:, :, 3, :]   # (derivatives+1, n_envs, n_samples)
 
     return pos, yaw
+
+
+@torch.jit.script
+def eval_polynomial_curve_6dof(t: torch.Tensor, coeffs: torch.Tensor, derivatives: int = 0) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+    """
+    Evaluate polynomial curves and their derivatives for multiple environments with local time.
+
+    Assumes that n_curves == 4: the first 3 curves correspond to (x, y, z),
+    and the last 3 correspond to (roll, pitch, yaw).
+
+    Args:
+        t (Tensor): Local time samples for each environment.
+            Shape: (n_envs, n_samples).
+        coeffs (Tensor): Polynomial coefficients.
+            Shape: (n_envs, n_curves, degree + 1).
+        derivatives (int): Number of derivatives to compute (0 to max degree).
+
+    Returns:
+        pos (Tensor): Evaluated polynomial curves (x,y,z) and their derivatives.
+            Shape: (derivatives + 1, n_envs, 3, n_samples).
+        roll (Tensor): Evaluated roll curve and its derivatives.
+            Shape: (derivatives + 1, n_envs, n_samples).
+        pitch (Tensor): Evaluated pitch curve and its derivatives.
+            Shape: (derivatives + 1, n_envs, n_samples).
+        yaw (Tensor): Evaluated yaw curve and its derivatives.
+            Shape: (derivatives + 1, n_envs, n_samples).
+    """
+    n_envs, n_samples = t.shape
+    n_envs_coeffs, n_curves, degree_plus_one = coeffs.shape
+    degree = degree_plus_one - 1
+
+    # Make sure we have enough curves for pos(3) + yaw(1) = 4
+    assert n_curves == 6, "This function expects exactly 6 curves (x,y,z,roll,pitch,yaw)."
+    assert n_envs == n_envs_coeffs, (
+        f"Mismatch: t has {n_envs} envs, but coeffs has {n_envs_coeffs}."
+    )
+
+    # Expand coefficients so that each environment, curve, and power
+    # can be multiplied by the times t (n_samples)
+    # Final shape will be (n_envs, n_curves, degree+1, n_samples)
+    coeffs = coeffs.unsqueeze(-1).expand(n_envs, n_curves, degree_plus_one, n_samples)
+
+    # Precompute powers of t up to 'degree'
+    # t_powers shape: (n_envs, degree+1, n_samples)
+    t_powers = torch.stack([t.pow(i) for i in range(degree + 1)], dim=2)
+    t_powers = t_powers.permute(0, 2, 1)  # now (n_envs, degree+1, n_samples)
+
+    # Precompute derivative factorial-like coefficients:
+    # For the i-th derivative of x^j, the multiplier is j*(j-1)*...(j-i+1).
+    # If i>j, the derivative should be zero automatically.
+    factorial_coeffs = torch.zeros((derivatives + 1, degree + 1),
+                                   device=coeffs.device,
+                                   dtype=torch.float32)
+    for i in range(derivatives + 1):
+        for j in range(degree + 1):
+            if j < i:
+                # e.g., 3rd derivative of x^2 => 0
+                factorial_coeffs[i, j] = 0.0
+            elif i == 0:
+                # 0th derivative => multiply by 1
+                factorial_coeffs[i, j] = 1.0
+            else:
+                # j*(j-1)*...*(j-i+1)
+                factorial_coeffs[i, j] = torch.prod(
+                    torch.arange(j, j - i, -1, device=coeffs.device).float()
+                )
+
+    # Compute each derivative i from 0..derivatives
+    results_per_derivative = []
+    for i in range(derivatives + 1):
+        # for derivative i, we want factorial_coeffs[i, j] * coeffs_j * t^(j-i)
+
+        # shape: (1,1,degree+1,1)
+        coeff_factors = factorial_coeffs[i, :].view(1, 1, -1, 1)
+        valid_coeffs = coeffs * coeff_factors  # (n_envs, n_curves, degree+1, n_samples)
+
+        # max(0, ...) so the slice stop is never negative (negative stop counts from the end).
+        n_t_powers = max(0, degree + 1 - i)
+        t_powers_for_i = t_powers[:, :n_t_powers, :]  # shape: (n_envs, degree+1-i, n_samples) or empty if i>degree
+        d_i = (
+            valid_coeffs[:, :, i:, :] *  # c_(i..degree)
+            t_powers_for_i.unsqueeze(1)  # t^(0..degree-i), unsqueeze(1) for 'curve' dimension
+        ).sum(dim=2)  # sum over the polynomial power dimension
+
+        results_per_derivative.append(d_i)
+
+    # Stack all derivatives => shape: (derivatives+1, n_envs, n_curves, n_samples)
+    full_data = torch.stack(results_per_derivative, dim=0)
+
+    # Now split out pos (the first 3 curves) and yaw (the 4th curve)
+    pos = full_data[:, :, :3, :]  # (derivatives+1, n_envs, 3, n_samples)
+    roll = full_data[:, :, 3, :]   # (derivatives+1, n_envs, n_samples)
+    pitch = full_data[:, :, 4, :]   # (derivatives+1, n_envs, n_samples)
+    yaw = full_data[:, :, 5, :]   # (derivatives+1, n_envs, n_samples)
+
+    return pos, roll, pitch, yaw

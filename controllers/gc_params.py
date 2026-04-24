@@ -445,4 +445,32 @@ gc_params_dict = {
             "log_dir": "./logs/end_mass_motor_dynamics_2dof_traj_tracking_ff_flatness/",
         },
     },
+
+    # COM Control - Trajectory Tracking base (no motor dynamics or end effector mass) - optimized params
+    "Isaac-AerialManipulator-2DOF-TrajectoryTracking-v0" : {
+        "log_dir": "./logs/baseline_2dof_traj_tracking_ff_flatness_optim/",
+        "controller_params": {
+            "kp_pos_gain_xy": 9.264840962350943,
+            "kp_pos_gain_z": 11.425982624014877,
+            "kd_pos_gain_xy": 4.191353215197961,
+            "kd_pos_gain_z": 3.7515967810140287,
+            "kp_att_gain_xy": 200.24823239004226,
+            "kp_att_gain_z": 13.23017699927602,
+            "kd_att_gain_xy": 17.631285412729202,
+            "kd_att_gain_z": 2.3794412113033987,
+            "kp_shoulder_gain": 68.11671289158548,
+            "kd_shoulder_gain": 30.002925288676764,
+            "ki_shoulder_gain": 8.18255719102166,
+            "kp_wrist_gain": 19.988852441699905,
+            "kd_wrist_gain": 7.2557333070396774,
+            "ki_wrist_gain": 2.698181135408282,
+            # 'kp_pos_gain_xy': 9.550955174517687, 'kp_pos_gain_z': 11.867931205826705, 'kd_pos_gain_xy': 5.102978322000315, 'kd_pos_gain_z': 3.9429288042944717, 'kp_att_gain_xy': 193.85755840851624, 'kp_att_gain_z': 13.894297085427425, 'kd_att_gain_xy': 17.011316756589185, 'kd_att_gain_z': 1.8840716956748171, 'kp_shoulder_gain': 72.63678973344318, 'kd_shoulder_gain': 31.526325185410073, 'ki_shoulder_gain': 7.961805676028691, 'kp_wrist_gain': 18.88682039941405, 'kd_wrist_gain': 6.756344587233141, 'ki_wrist_gain': 2.925338443881262,
+            "feed_forward": True,
+            "urdf_path": "../models/uam_2dof_ee_mass_pin.urdf", # path relative to controllers/decoupled_controller.py
+            "disable_gravity": False,
+            "use_com_control": True,
+            "use_integral": True,
+            "log_dir": "./logs/baseline_2dof_traj_tracking_ff_flatness_optim/",
+        },
+    },
 }

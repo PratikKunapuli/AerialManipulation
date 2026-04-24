@@ -410,7 +410,7 @@ class DecoupledController():
         # this works under the assumption that the required yaw trajectory of the quadrotor is sufficient slow
         start_ori = torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).tile(batch_size, horizon, 1) # NOTE: need to update this anytime you change the urdf, would be better to read from env self.model_ee_ori
         yaw_des = yaw_des.unsqueeze(1).tile(1, horizon, 1)
-        ff_yaw, ff_shoulder, ff_wrist = math_utils.aerial_manipulator_angle_solns_2dof(start_ori, ff_ori, yaw_des)
+        ff_yaw, ff_shoulder, ff_wrist = math_utils.aerial_manipulator_angle_solns_2dof(start_ori, ff_ori, yaw_des, shape_vec=ff_shape_vec)
         yaw_dot = isaac_math_utils.wrap_to_pi(torch.diff(ff_yaw, dim=1)) / self.policy_dt
         yaw_ddot = torch.diff(yaw_dot, dim=1) / self.policy_dt
         shoulder_dot = isaac_math_utils.wrap_to_pi(torch.diff(ff_shoulder, dim=1)) / self.policy_dt

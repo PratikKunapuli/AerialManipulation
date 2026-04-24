@@ -281,6 +281,17 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                 env_cfg.viewer.env_index = args_cli.follow_robot
                 env_cfg.viewer.asset_name = "robot"
 
+            elif "BallThrow" in args_cli.task:
+                env_cfg.viewer.eye = (2.0, 0.0, 2.0)
+
+                env_cfg.viewer.lookat = (0, 0, 0)
+                env_cfg.viewer.resulution = (720, 720)
+                env_cfg.viewer.origin_type = "asset_root"
+                # env_cfg.viewer.origin_type = "env"
+                env_cfg.viewer.env_index = args_cli.follow_robot
+                env_cfg.viewer.asset_name = "robot"
+
+
             else:
                 # env_cfg.viewer.eye = (0.75, 0.75, 0.75)
                 # env_cfg.viewer.lookat = (0.0, 0.0, 0.0)
@@ -303,7 +314,13 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
 
 
             robot_index_prefix = f"_robot_{args_cli.follow_robot}"
-
+        # elif "BallThrow" in args_cli.task:
+        #     env_cfg.viewer.eye = (-7.5, 0.0, 2.0)
+            # env_cfg.viewer.lookat = (0, 0, 0)
+            # env_cfg.viewer.resulution = (720, 720)
+            # env_cfg.viewer.origin_type = "asset_root"
+            # env_cfg.viewer.env_index = args_cli.follow_robot
+            # env_cfg.viewer.asset_name = "robot"
 
     
     # env_cfg.viewer.eye = (3.0, 1.5, 2.0)
@@ -524,14 +541,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
                     "Ang vel error ee frame": slice(55, 55+3),
                     "Wrist joint position": 27,
                     "Wrist joint velocity": 29,
+                    "Desired position": slice(30, 30+3),
+                    "Desired orientation": slice(33, 33+4),
                 }
                 os.makedirs(plot_path, exist_ok=True)
                 for plot, col in plots.items():
                     fig, ax = plt.subplots()
                     data = full_states[args_cli.follow_robot, :-1, col].cpu()
                     ax.plot(x, data.cpu())
-                    if isinstance(col, slice):
+                    if isinstance(col, slice) and plot != "Desired orientation":
                         ax.legend(['x', 'y', 'z'])
+                    elif plot == "Desired orientation":
+                        ax.legend(['w', 'x', 'y', 'z'])
                     ax.set_title(plot)
                     plot_name = f'eval_{plot}_robot_{args_cli.follow_robot}.png'
                     fig.savefig(os.path.join(plot_path, plot_name))

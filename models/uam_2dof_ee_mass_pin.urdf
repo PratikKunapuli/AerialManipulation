@@ -37,7 +37,7 @@
   </link>
   <link name="virtualvehicle">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
     </inertial>
@@ -219,9 +219,10 @@
 
   <link name="arm">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
+      <!-- <origin xyz="0 0 -0.11499999999999999" rpy="0 3.14159265359 0" /> -->
     </inertial>
     <!-- Wrist Motor -->
     <visual>
@@ -234,7 +235,7 @@
     <!-- Carbon Fiber Tube -->
     <visual>
       <!-- <origin xyz="0 0 -0.039999999999999994" rpy="0 0 0" /> -->
-      <origin xyz="0 0 -0.11499999999999999" rpy="0 3.14159265359 0" />
+      <origin xyz="0 0 -0.11499999999999999" rpy="0 0 0" />
       <geometry>
         <cylinder radius=".0075" length="0.11499999999999999"/>
       </geometry>
@@ -242,17 +243,17 @@
     </visual>
   </link>
 
-  <joint name="joint_shoulder" type="continuous" dont_collapse="true">
+  <joint name="joint_shoulder" type="revolute" dont_collapse="true">
     <parent link="virtualvehicle"/>
     <child link="arm"/>
     <axis rpy="0 0 0" xyz="0 -1 0"/>
     <origin rpy="0 -1.57079632679 0" xyz="0 0 0"/>
-    <limit velocity="1e9" effort="2.0" lower="-3.14159265359" upper="3.14159265359" />
+    <limit velocity="1e9" effort="2.0" lower="-31.4159265359" upper="31.4159265359" />
   </joint>
 
   <link name="gripper">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -292,24 +293,26 @@
     </visual>
   </link>
 
-  <joint name="joint_wrist" type="continuous" dont_collapse="true">
+  <joint name="joint_wrist" type="revolute" dont_collapse="true">
     <parent link="arm"/>
     <child link="gripper"/>
     <axis rpy="0 0 0" xyz="0 1 0"/>
-    <origin rpy="1.57079632679 3.14159265359 0" xyz="0 0 -0.205"/>
-    <limit velocity="1e9" effort="1.0" lower="-3.14159265359" upper="3.14159265359" />
+    <origin rpy="1.57079632679 3.14159265359 1.57079632679" xyz="0 0 -0.205"/>
+    <limit velocity="1e9" effort="1.0" lower="-31.4159265359" upper="31.4159265359" />
   </joint>
 
+  <!-- Helpful for getting ee pose and adding an end mass for the model-based controller, this will be omitted (i.e., only modeling the platform itself)-->
   <link name="endeffector">
     <inertial>
-      <mass value="0.2"/>
-      <inertia ixx="0.0026767" ixy="0.0" ixz="0.0" iyy="0.0026767" iyz="0.0" izz="0.00020164"/> 
-      <!-- izz 10x larger than orginal calculation to see impact on training performance -->
+      <mass value="1e-6"/>
+      <inertia ixx="4e-11" ixy="0.0" ixz="0.0" iyy="4e-11" iyz="0.0" izz="4e-11"/>
+      <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
+      <!-- <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/> -->
     </inertial>
     <visual>
       <origin xyz="0 0 0" rpy="0 0 0" />
       <geometry>
-        <sphere radius="0.005"/>
+        <sphere radius="0.01"/>
       </geometry>
       <material name="blue"/>
     </visual>
@@ -323,7 +326,7 @@
 
   <link name="COM">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.0 0.0"/>
     </inertial>
@@ -341,11 +344,31 @@
     <origin rpy="0 0 0" xyz="0 0 -0.041"/>
   </joint>
 
+  <!-- This is a workaround to model the end effector inertial properites in one link since we can't have two joints connecting the same links (arm and vehicle) -->
+  <link name="endeffector_com">
+    <inertial>
+      <mass value="0.2"/>
+      <!-- modeling inertia of the arm: cylinder with radius 2.5 cm (to account for gripper at end), length 20 cm -->
+      <inertia ixx="2.7e-3" ixy="0.0" ixz="0.0" iyy="2.7e-3" iyz="0.0" izz="6.25e-5"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 0" rpy="0 0 0" />
+      <geometry>
+        <sphere radius="0.01"/>
+      </geometry>
+      <material name="carbon"/>
+    </visual>
+  </link>
 
+  <joint name="endeffector_com_placement" type="fixed" dont_collapse="true">
+    <parent link="endeffector"/>
+    <child link="endeffector_com"/>
+    <origin rpy="-1.57079632679 0 0" xyz="0 -0.1 0"/>
+  </joint>
 
   <link name="motor1">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -359,7 +382,7 @@
   </link>
   <link name="motor2">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -373,7 +396,7 @@
   </link>
   <link name="motor3">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -387,7 +410,7 @@
   </link>
   <link name="motor4">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -402,7 +425,7 @@
 
   <link name="prop1">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -416,7 +439,7 @@
   </link>
   <link name="prop2">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -430,7 +453,7 @@
   </link>
   <link name="prop3">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
@@ -444,7 +467,7 @@
   </link>
   <link name="prop4">
     <inertial>
-      <mass value="1e-10"/>
+      <mass value="1e-6"/>
       <inertia ixx="1e-10" ixy="0" ixz="0" iyy="1e-10" iyz="0" izz="1e-10"/>
       <origin rpy="0 0 0" xyz="0.0 0.04 0.0"/>
     </inertial>
