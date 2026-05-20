@@ -84,7 +84,10 @@ def plot_error_pos_yaw(data1, data2, name1, name2=None, data3=None, name3=None, 
         pos_quantiles_3, yaw_quantiles_3 = plotting_utils.get_quantiles_error(data3, [0.25, 0.5, 0.75])
 
     if axs is None:
-        fig, axs = plt.subplots(2, 1, figsize=(3.5, 5), dpi=300)
+        fig, axs = plt.subplots(1, 2, figsize=(7, 3.5), dpi=300)
+    axs = np.array(axs).reshape(-1)
+    if axs.size != 2:
+        raise ValueError("plot_error_pos_yaw expects exactly two axes.")
     x_axis = np.arange(T) * 0.02
     plot_clip_time = (T+1) * 0.02
 
@@ -97,7 +100,7 @@ def plot_error_pos_yaw(data1, data2, name1, name2=None, data3=None, name3=None, 
         sns.lineplot(x=x_axis, y=pos_quantiles_3[1], ax=axs[0], label=name3, color=params["c3_color"], legend=False)
         axs[0].fill_between(x_axis, pos_quantiles_3[0], pos_quantiles_3[2], alpha=0.2, color=params["c3_color"])
     axs[0].set_ylabel("Position Error (m)")
-    plt.setp(axs[0].get_xticklabels(), visible=False)
+    axs[0].set_xlabel("Time (s)")
     axs[0].set_xlim(0, plot_clip_time)
     axs[0].set_xticks(np.linspace(0, plot_clip_time, 3))
     axs[0].set_xticklabels([np.round(x, 2) for x in np.linspace(0, plot_clip_time, 3)])
@@ -397,6 +400,23 @@ def _bin_error_on_velocity_grid(lin_vel_np, ang_vel_np, error_np, n_bins_lin, n_
     return X, Y, X_edge, Y_edge, Z
 
 
+def _style_3d_axes(ax):
+    """Force white 3D background panes and black grid lines."""
+    ax.set_facecolor("white")
+    # Make pane backgrounds white
+    pane_white = (1.0, 1.0, 1.0, 1.0)
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        if hasattr(axis, "set_pane_color"):
+            axis.set_pane_color(pane_white)
+    # 3D grid style (private but stable across mpl versions used in practice)
+    for axis in (ax.xaxis, ax.yaxis, ax.zaxis):
+        if hasattr(axis, "_axinfo") and "grid" in axis._axinfo:
+            axis._axinfo["grid"]["color"] = (0.0, 0.0, 0.0, 0.4)
+            axis._axinfo["grid"]["linewidth"] = 0.6
+            axis._axinfo["grid"]["linestyle"] = "-"
+    ax.grid(True)
+
+
 def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_bins_lin=20, n_bins_ang=20):
     """3D surface+scatter and contour figures of trajectory RMSE vs peak desired velocity magnitude.
 
@@ -419,7 +439,8 @@ def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_
 
     # --- 3D figure: all N scatter points + binned mean surface ---
     fig_3d = plt.figure(figsize=(10, 4.5), dpi=300)
-    fig_3d.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Velocity")
+    fig_3d.patch.set_facecolor("white")
+    # fig_3d.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Velocity")
     for col_idx, (error_np, zlabel, _, _cmap) in enumerate(error_specs):
         ax = fig_3d.add_subplot(1, 2, col_idx + 1, projection='3d')
         X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_vel_np, ang_vel_np, error_np, n_bins_lin, n_bins_ang)
@@ -430,8 +451,10 @@ def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_
         ax.set_xlabel(xlabel, labelpad=6)
         ax.set_ylabel(ylabel, labelpad=6)
         ax.set_zlabel(zlabel, labelpad=6)
-    fig_3d.tight_layout()
-    _save_fig(fig_3d, f"{output_prefix}_{shortname}_vel_3d")
+        _style_3d_axes(ax)
+    fig_3d.tight_layout(pad=2.0)
+    fig_3d.subplots_adjust(left=0.04, right=0.96, bottom=0.08, top=0.88, wspace=0.22)
+    _save_fig(fig_3d, f"{output_prefix}_{shortname}_vel_3d", use_tight_bbox=False)
 
     error_specs = [
         (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "rainbow"),
@@ -440,7 +463,7 @@ def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_
 
     # --- Contour figure ---
     fig_c, axs_c = plt.subplots(1, 2, figsize=(9, 4), dpi=300)
-    fig_c.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Velocity")
+    # fig_c.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Velocity")
     n_levels = 20
     for col_idx, (error_np, _, clabel, cmap) in enumerate(error_specs):
         X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_vel_np, ang_vel_np, error_np, n_bins_lin, n_bins_ang)
@@ -454,10 +477,67 @@ def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_
     _save_fig(fig_c, f"{output_prefix}_{shortname}_vel_contour")
 
 
-def _save_fig(fig, output_name):
+def plot_acceleration_error_analysis(data, name, shortname, color, output_prefix, n_bins_lin=20, n_bins_ang=20):
+    """3D surface+scatter and contour figures of trajectory RMSE vs peak desired acceleration magnitude."""
+    lin_acc_peak, ang_acc_peak, pos_rmse, ori_rmse = \
+        plotting_utils.get_peak_acc_rmse_per_trajectory(data)
+    lin_acc_np = lin_acc_peak.numpy()
+    ang_acc_np = ang_acc_peak.numpy()
+    pos_rmse_np = pos_rmse.numpy()
+    ori_rmse_np = ori_rmse.numpy()
+
+    xlabel = r"$\max\|\mathbf{a}^{\mathrm{des}}\|$ (m/s$^2$)"
+    ylabel = r"$\max\|\dot{\boldsymbol{\omega}}^{\mathrm{des}}\|$ (rad/s$^2$)"
+    error_specs = [
+        (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "magma"),
+        (ori_rmse_np, "Orientation RMSE (rad)", "Mean Orientation RMSE (rad)", "magma"),
+    ]
+
+    fig_3d = plt.figure(figsize=(10, 4.5), dpi=300)
+    fig_3d.patch.set_facecolor("white")
+    # fig_3d.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Acceleration")
+    for col_idx, (error_np, zlabel, _, _cmap) in enumerate(error_specs):
+        ax = fig_3d.add_subplot(1, 2, col_idx + 1, projection='3d')
+        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_acc_np, ang_acc_np, error_np, n_bins_lin, n_bins_ang)
+        Z_surf = np.pad(Z, ((0, 1), (0, 1)), mode='edge')
+        Z_surf_masked = np.ma.array(Z_surf, mask=np.isnan(Z_surf))
+        ax.scatter(lin_acc_np, ang_acc_np, error_np, alpha=0.3, s=3, c=color)
+        ax.plot_surface(X_edge, Y_edge, Z_surf_masked, alpha=0.65, cmap=_cmap)
+        ax.set_xlabel(xlabel, labelpad=6)
+        ax.set_ylabel(ylabel, labelpad=6)
+        ax.set_zlabel(zlabel, labelpad=6)
+        _style_3d_axes(ax)
+    fig_3d.tight_layout(pad=2.0)
+    fig_3d.subplots_adjust(left=0.04, right=0.96, bottom=0.08, top=0.88, wspace=0.22)
+    _save_fig(fig_3d, f"{output_prefix}_{shortname}_acc_3d", use_tight_bbox=False)
+
+    error_specs = [
+        (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "rainbow"),
+        (ori_rmse_np, "Orientation RMSE (rad)", "Mean Orientation RMSE (rad)", "rainbow"),
+    ]
+
+    fig_c, axs_c = plt.subplots(1, 2, figsize=(9, 4), dpi=300)
+    # fig_c.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Acceleration")
+    n_levels = 20
+    for col_idx, (error_np, _, clabel, cmap) in enumerate(error_specs):
+        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_acc_np, ang_acc_np, error_np, n_bins_lin, n_bins_ang)
+        Z_masked = np.ma.array(Z, mask=np.isnan(Z))
+        cf = axs_c[col_idx].contourf(X, Y, Z_masked, cmap=cmap, levels=n_levels)
+        axs_c[col_idx].contour(X, Y, Z_masked, colors='k', linewidths=0.4, levels=n_levels, alpha=0.35)
+        plt.colorbar(cf, ax=axs_c[col_idx], label=clabel)
+        axs_c[col_idx].set_xlabel(xlabel)
+        axs_c[col_idx].set_ylabel(ylabel)
+    fig_c.tight_layout()
+    _save_fig(fig_c, f"{output_prefix}_{shortname}_acc_contour")
+
+
+def _save_fig(fig, output_name, use_tight_bbox=True):
     save_dir = "controller_stats"
     os.makedirs(save_dir, exist_ok=True)
-    fig.savefig(os.path.join(save_dir, f"{output_name}.png"), bbox_inches='tight', dpi=500, format='png')
+    save_kwargs = {"dpi": 500, "format": "png"}
+    if use_tight_bbox:
+        save_kwargs["bbox_inches"] = "tight"
+    fig.savefig(os.path.join(save_dir, f"{output_name}.png"), **save_kwargs)
     # fig.savefig(os.path.join(save_dir, f"{output_name}.pdf"), bbox_inches='tight', dpi=500, format='pdf')
     plt.close(fig)
 
@@ -477,7 +557,7 @@ def gen_separate_layouts(data1, data2, name1, name2, shortname1, shortname2, out
         Patch(facecolor=params["violin_color_2"], edgecolor=params["violin_color_2"], fill=True, label='Orientation'),
     ]
 
-    fig_error, axs_error = plt.subplots(2, 1, figsize=(4, 5), dpi=300)
+    fig_error, axs_error = plt.subplots(1, 2, figsize=(7, 3.5), dpi=300)
     plot_error_pos_yaw(data1, data2, name1, name2, data3, name3, axs_error)
     fig_error.legend(handles=error_legend_elements, loc='lower center', ncol=len(error_legend_elements), bbox_to_anchor=(0.5, -0.02))
     fig_error.tight_layout(rect=[0, 0.03, 1, 1])
@@ -489,11 +569,11 @@ def gen_separate_layouts(data1, data2, name1, name2, shortname1, shortname2, out
     # fig_violin.tight_layout(rect=[0, 0.03, 1, 1])
     # _save_fig(fig_violin, f"{output}_violin")
 
-    fig_crash, ax_crash = plt.subplots(1, 1, figsize=(3.5, 3.5), dpi=300)
-    plot_crash_rate_over_time(data1, data2, name1, name2, data3, name3, ax_crash)
-    fig_crash.legend(handles=error_legend_elements, loc='lower center', ncol=len(error_legend_elements), bbox_to_anchor=(0.5, -0.12))
-    fig_crash.tight_layout(rect=[0, 0.07, 1, 1])
-    _save_fig(fig_crash, f"{output}_crash_rate")
+    # fig_crash, ax_crash = plt.subplots(1, 1, figsize=(3.5, 3.5), dpi=300)
+    # plot_crash_rate_over_time(data1, data2, name1, name2, data3, name3, ax_crash)
+    # fig_crash.legend(handles=error_legend_elements, loc='lower center', ncol=len(error_legend_elements), bbox_to_anchor=(0.5, -0.12))
+    # fig_crash.tight_layout(rect=[0, 0.07, 1, 1])
+    # _save_fig(fig_crash, f"{output}_crash_rate")
 
     crash_rate_1_final = plotting_utils.get_crash_rate_series(data1)[-1].item()
     print(f"{name1} crash rate at final timestep: {crash_rate_1_final:.6f}")
@@ -512,6 +592,7 @@ def gen_separate_layouts(data1, data2, name1, name2, shortname1, shortname2, out
             controllers_vel.append((data3, name3, shortname3, params["c3_color"]))
         for d, n, sn, col in controllers_vel:
             plot_velocity_error_analysis(d, n, sn, col, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang)
+            plot_acceleration_error_analysis(d, n, sn, col, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang)
 
 
 if __name__ == "__main__":

@@ -33,7 +33,7 @@ cli_args.add_rsl_rl_args(parser)
 AppLauncher.add_app_launcher_args(parser)
 args_cli, hydra_args = parser.parse_known_args()
 # always enable cameras to record video
-args_cli.enable_cameras = True
+args_cli.enable_cameras = args_cli.video
 args_cli.headless = True # make false to see the simulation
 
 # clear out sys.argv for Hydra
@@ -630,10 +630,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg: RslRlOnPolic
             # plt.legend()
             # plt.savefig(os.path.join(policy_path, save_prefix + "eval_plot.png"))
 
-
+            # breakpoint()
             envs.close()
             simulation_app.close()
-
     
     
 
@@ -642,4 +641,4 @@ if __name__ == "__main__":
     # run the main function
     main()
     # close sim app
-    simulation_app.close()
+    # simulation_app.close()

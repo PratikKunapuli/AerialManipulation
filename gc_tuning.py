@@ -178,6 +178,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg, agent_cfg):
     env_cfg.sim.device = args_cli.device if args_cli.device is not None else env_cfg.sim.device
     env_cfg.task_body = "endeffector"
     env_cfg.goal_body = "endeffector"
+    env_cfg.eval_trajectory = "fast_lissaajous"
 
     # Reward shaping
     env_cfg.body_pos_radius_curriculum = 0

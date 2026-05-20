@@ -1,0 +1,27 @@
+python eval_rslrl.py --video --task Isaac-Crazyflie-SRT-Hover-v0 --experiment_name SRT-Hover --num_envs 100 --follow_robot 0 --load_run
+git config --global --add safe.directory /project_code
+docker run -it --rm -v .:/code --gpus "device=2" --entrypoint /bin/bash --runtime=nvidia -e DISPLAY=0.0 isaac-lab-base
+python train_rslrl.py --task Isaac-Crazyflie-SRT-Hover-v0 --experiment_name SRT-Hover --num_envs 4096 env.pos_distance_reward_scale=20.0 env.pos_error_reward_scale=-15.0 env.lin_vel_reward_scale=-0.01 env.ang_vel_reward_scale=-0.05 env.yaw_error_reward_scale=-2.0 env.previous_thrust_reward_scale=-0.01 env.previous_attitude_reward_scale=-0.5 env.action_norm_reward_scale=0.0 env.stay_alive_reward=1.0 env.crash_penalty=-10.0
+python eval_rslrl.py --video --task Isaac-Crazyflie-SRT-Hover-v0 --experiment_name SRT-Hover --num_envs 100 --load_run
+python train_rslrl.py --task Isaac-AerialManipulator-2DOF-Hover-v0 --experiment_name 2DOF-Hover --num_envs 4096
+python eval_rslrl.py --video --task Isaac-AerialManipulator-2DOF-Hover-v0 --experiment_name 2DOF-Hover-IK --num_envs 100 --load_run
+python train_rslrl.py --task Isaac-AerialManipulator-2DOF-Hover-v0 --experiment_name 2DOF-Hover --num_envs 4096 env.yaw_error_reward_scale=0.0 env.ori_error_reward_scale=-10.0 env.joint_vel_reward_scale=-0.01 env.action_norm_reward_scale=-0.01 env.stay_alive_reward=0.5 env.crash_penalty=-10.0
+python train_rslrl.py --task Isaac-AerialManipulator-2DOF-Hover-v0 --experiment_name 2DOF-Hover-IK --num_envs 4096 
+tensorboard --logdir . --port 8001
+python plot_hover_single.py --experiment_name 2DOF-Hover-IK --load_run 
+python eval_rslrl.py --video --task Isaac-AerialManipulator-2DOF-Hover-v0 --num_envs 100 --baseline true --experiment_name 2DOF-Hover-IK
+python train_rslrl.py --task Isaac-AerialManipulator-2DOF-TrajectoryTracking-v0 --experiment_name 2DOF-Trajectory --num_envs 8192
+python eval_rslrl.py --video --task Isaac-AerialManipulator-2DOF-TrajectoryTracking-v0 --num_envs 100 --experiment_name 2DOF-Trajectory
+python ../gc_tuning.py --task Isaac-AerialManipulator-2DOF-Hover-v0 --num_envs 1024
+python ../gc_tuning.py --task Isaac-AerialManipulator-2DOF-TrajectoryTracking-v0 --num_envs 1024
+python eval_rslrl.py --video --task Isaac-AerialManipulator-2DOF-TrajectoryTracking-v0 --num_envs 100 --baseline true --experiment_name 2DOF-Trajectory
+/workspace/isaaclab/_isaac_sim/kit/python/bin/optuna-dashboard sqlite:///database_gc_tuning.sqlite3
+pip install pin==3.3.1
+pip install numpy==1.26.4
+
+python compare_controllers_cli.py -c1 -c1n -c1s -c2 -c2s -c2n --output
+
+python eval_rslrl.py --video --task Isaac-AerialManipulator-2DOF-TrajectoryTracking-yes-mass-yes-motor --num_envs 100 --experiment_name 2DOF-Trajectory --load_run 2026-04-09_17-11-03_full-fast-lissaajous-train
+python eval_rslrl.py --video --task Isaac-AerialManipulator-2DOF-BallThrow-v0 --num_envs 10 --experiment_name 2DOF-BallThrow
+
+python train_rslrl.py --task Isaac-AerialManipulator-2DOF-TrajectoryTracking-no-mass-yes-motor --experiment_name 2DOF-Trajectory --num_envs 8192 --run_name motor-dyn-only-ablation env.eval_trajectory=fast_lissaajous

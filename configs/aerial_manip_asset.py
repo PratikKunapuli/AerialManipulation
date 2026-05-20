@@ -129,6 +129,67 @@ AERIAL_MANIPULATOR_2DOF_CFG = ArticulationCfg(
 )
 """Configuration for the Aerial Manipulator 2DOF."""
 
+
+AERIAL_MANIPULATOR_2DOF_BLADE_PROPS_CFG = ArticulationCfg(
+    prim_path="{ENV_REGEX_NS}/Robot",
+    spawn=sim_utils.UsdFileCfg(
+        usd_path=f"{MODELS_PATH}/uam_2dof_ee_mass_blade_props.usd",
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            max_depenetration_velocity=10.0,
+            enable_gyroscopic_forces=True,
+        ),
+        articulation_props=sim_utils.ArticulationRootPropertiesCfg(
+            enabled_self_collisions=False,
+            solver_position_iteration_count=4,
+            solver_velocity_iteration_count=0,
+            sleep_threshold=0.005,
+            stabilization_threshold=0.001,
+        ),
+        copy_from_source=False,
+    ),
+    init_state=ArticulationCfg.InitialStateCfg(
+        pos=(0.0, 0.0, 0.5),
+        joint_pos={
+            ".*": 0.0,
+        },
+        joint_vel={
+            "prop1": 200.0,
+            "prop2": -200.0,
+            "prop3": 200.0,
+            "prop4": -200.0,
+            "joint_wrist": 0.0,
+            "joint_shoulder": 0.0,
+        },
+    ),
+    actuators={
+        "shoulder": IdealPDActuatorCfg(
+            joint_names_expr=["joint_shoulder"],
+            effort_limit=1.0,
+            velocity_limit=10.0,
+            stiffness=0.0,
+            damping=0.0,
+            armature=0.0,
+            friction=0.0,
+        ),
+        "wrist": IdealPDActuatorCfg(
+            joint_names_expr=["joint_wrist"],
+            effort_limit=0.1,
+            velocity_limit=10.0,
+            stiffness=0.0,
+            damping=0.0,
+            armature=0.0,
+            friction=0.0,
+        ),
+        "dummy_prop": ImplicitActuatorCfg(
+            joint_names_expr=["prop[1-4]"],
+            stiffness=0.0,
+            damping=0.0,
+        ),
+    },
+)
+"""Configuration for 2DOF with rotating prop joints."""
+
 AERIAL_MANIPULATOR_1DOF_CFG = ArticulationCfg(
     prim_path="{ENV_REGEX_NS}/Robot",
     spawn=sim_utils.UsdFileCfg(

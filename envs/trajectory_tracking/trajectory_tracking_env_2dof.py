@@ -49,7 +49,7 @@ import numpy as np
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_0DOF_CFG, AERIAL_MANIPULATOR_0DOF_DEBUG_CFG, AERIAL_MANIPULATOR_QUAD_ONLY_CFG
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_0DOF_LONG_ARM_COM_MIDDLE_CFG
 from configs.aerial_manip_asset import AERIAL_MANIPULATOR_0DOF_SMALL_ARM_COM_V_CFG, AERIAL_MANIPULATOR_0DOF_SMALL_ARM_COM_MIDDLE_CFG, AERIAL_MANIPULATOR_0DOF_SMALL_ARM_COM_EE_CFG
-from configs.aerial_manip_asset import AERIAL_MANIPULATOR_2DOF_CFG
+from configs.aerial_manip_asset import AERIAL_MANIPULATOR_2DOF_BLADE_PROPS_CFG, AERIAL_MANIPULATOR_2DOF_CFG
 
 from utils.math_utilities import (
     yaw_from_quat,
@@ -467,8 +467,7 @@ class AerialManipulator2DOFTrajectoryTrackingEnvCfg(AerialManipulatorTrajectoryT
     action_space = 6
     num_joints = 2
     observation_space = 16 # TODO: might need to update this..
-    # 3(vel) + 3(ang vel) + 3(pos) + 3(ori) + 2(joint pos) + 2(joint vel) = 16
-    # action_space= gym.spaces.Box(low=-1.0, high=1.0, shape=(6,))
+    # 3(vel) + 3(ang vel) + 3(pos) + 3(ori) + 2(joint pos) +=(6,))
 
     # robot
     robot: ArticulationCfg = AERIAL_MANIPULATOR_2DOF_CFG.replace(prim_path="/World/envs/env_.*/Robot")
@@ -794,15 +793,27 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         l = self.arm_length
         if eval_trajectory in ("shoulder", "s"):
         # Trajectory where only shoulder angle should change:
-            self.cfg.lissajous_amplitudes = [0.0, l, l, np.pi / 2, 0.0, 0.0]
+            self.cfg.lissajous_amplitudes = [0.0, l, l, 0.0, 0.0, 0.0]
             self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
             self.cfg.lissajous_frequencies = [0.0, 1.0, 1.0, 1.0, 0.0, 0.0]
             self.cfg.lissajous_frequencies_rand_ranges = [0.0] * 6
-            self.cfg.lissajous_phases = [0.0]*6
+            self.cfg.lissajous_phases = [0.0, np.pi/2, 0.0, 0.0, 0.0, 0.0]  # pi/2 phase so that y(t) = l*cos(t), and ee moves in a circle
             self.cfg.lissajous_phases_rand_ranges = [0.0]*6
             self.cfg.lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
             self.cfg.lissajous_offsets_rand_ranges = [0.0] * 6
-            self.cfg.trajectory_type = "lissaajous"
+            self.cfg.trajectory_type = "combined"
+            self.cfg.polynomial_x_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_x_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_y_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_y_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_z_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_z_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_roll_coefficients = [0.0, 1.0]
+            self.cfg.polynomial_roll_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_pitch_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_pitch_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_yaw_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_yaw_rand_ranges = [0.0, 0.0]
 
         elif eval_trajectory in ("wrist", "w"):
         # Trajectory where only wrist angle should change:
@@ -818,15 +829,27 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # Trajectory where only yaw angle should change:
         elif eval_trajectory in ("yaw", "y"):
-            self.cfg.lissajous_amplitudes = [l, l, 0.0, 0.0, 0.0, np.pi / 2]
+            self.cfg.lissajous_amplitudes = [l, l, 0.0, 0.0, 0.0, 0.0]
             self.cfg.lissajous_amplitudes_rand_ranges = [0.0] * 6
             self.cfg.lissajous_frequencies = [1.0, 1.0, 0.0, 0.0, 0.0, 1.0]
-            self.cfg.lissajous_frequencies_rand_ranges = [0.0] * 6
-            self.cfg.lissajous_phases = [0.0]*6
+            self.cfg.lissajous_frequencies_rand_ranges = [0.0]
+            self.cfg.lissajous_phases = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
             self.cfg.lissajous_phases_rand_ranges = [0.0]*6
             self.cfg.lissajous_offsets = [0.0, 0.0, 1.0, 0.0, 0.0, 0.0]
             self.cfg.lissajous_offsets_rand_ranges = [0.0] * 6
-            self.cfg.trajectory_type = "lissaajous"
+            self.cfg.trajectory_type = "combined"
+            self.cfg.polynomial_x_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_x_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_y_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_y_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_z_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_z_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_roll_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_roll_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_pitch_coefficients = [0.0, 0.0]
+            self.cfg.polynomial_pitch_rand_ranges = [0.0, 0.0]
+            self.cfg.polynomial_yaw_coefficients = [0.0, 1.0]
+            self.cfg.polynomial_yaw_rand_ranges = [0.0, 0.0]
 
         elif eval_trajectory in ("hover", "h"):
             self.cfg.lissajous_amplitudes = [0.0] * 6
@@ -1446,23 +1469,30 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # print("[Isaac Env: Observations] EE pos: ", ee_pos_w)
 
         if self.cfg.gc_mode:
-            future_com_pos_w = []
-            future_com_ori_w = []
-            for i in range(self.cfg.trajectory_horizon):
-                des_com_pos_w, des_com_ori_w = self.convert_ee_goal_to_com_goal(self._desired_pos_traj_w[:, i].squeeze(1), self._desired_ori_traj_w[:, i].squeeze(1))
-                future_com_pos_w.append(des_com_pos_w)
-                future_com_ori_w.append(des_com_ori_w)
+            # future_com_pos_w = []
+            # future_com_ori_w = []
+            # for i in range(self.cfg.trajectory_horizon):
+            #     des_com_pos_w, des_com_ori_w = self.convert_ee_goal_to_com_goal(self._desired_pos_traj_w[:, i].squeeze(1), self._desired_ori_traj_w[:, i].squeeze(1))
+            #     future_com_pos_w.append(des_com_pos_w)
+            #     future_com_ori_w.append(des_com_ori_w)
 
-            if len(future_com_pos_w) > 0:
-                future_com_pos_w = torch.stack(future_com_pos_w, dim=1)
-                future_com_ori_w = torch.stack(future_com_ori_w, dim=1)
-            else:
-                future_com_pos_w = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
-                future_com_ori_w = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 4, device=self.device)
+            # if len(future_com_pos_w) > 0:
+            #     future_com_pos_w = torch.stack(future_com_pos_w, dim=1)
+            #     future_com_ori_w = torch.stack(future_com_ori_w, dim=1)
+            # else:
+            #     future_com_pos_w = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 3, device=self.device)
+            #     future_com_ori_w = torch.zeros(self.num_envs, self.cfg.trajectory_horizon, 4, device=self.device)
 
             # com_pos_w, com_ori_w, com_lin_vel_w, com_ang_vel_w = self.get_frame_state_from_task("COM")
 
-            self.last_yaw_cmd, shoulder_req, wrist_req = aerial_manipulator_angle_solns_2dof(self.model_ee_ori.tile((self.num_envs, 1)), goal_ori_w, self.last_yaw_cmd)
+            # Estimate desired COM accel via finite differences - use this to calculate an instantaneous desired shape vector for calculating joint angles
+            com_lin_vel_des = torch.diff(self._desired_com_pos_traj, dim=1) / self.cfg.traj_update_dt
+            com_lin_acc_des = torch.diff(com_lin_vel_des, dim=1) / self.cfg.traj_update_dt
+            com_lin_acc_des = com_lin_acc_des[:, 0]
+            shape_vec_des = com_lin_acc_des - abs(self.cfg.sim.gravity[2]) * self._grav_vector_unit
+
+
+            self.last_yaw_cmd, shoulder_req, wrist_req = aerial_manipulator_angle_solns_2dof(self.model_ee_ori.tile((self.num_envs, 1)), goal_ori_w, self.last_yaw_cmd, shape_vec_des)
             shoulder_error_2 = wrap_to_pi(shoulder_joint_pos - shoulder_req)
             wrist_error_2 = wrap_to_pi(wrist_joint_pos - wrist_req)
             gc_obs = torch.cat(
@@ -1509,6 +1539,16 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 ang_vel_des[:, 0] = self._roll_traj[1, :, 0]
                 ang_vel_des[:, 1] = self._pitch_traj[1, :, 0]
                 ang_vel_des[:, 2] = self._yaw_traj[1, :, 0]
+            # Track desired accelerations for analysis plots (finite-difference equivalent from trajectory second derivative).
+            if self.cfg.trajectory_horizon > 0:
+                lin_acc_des = self._pos_traj[2, :, :, 0]
+                ang_acc_des = torch.zeros_like(ang_vel_w)
+                ang_acc_des[:, 0] = self._roll_traj[2, :, 0]
+                ang_acc_des[:, 1] = self._pitch_traj[2, :, 0]
+                ang_acc_des[:, 2] = self._yaw_traj[2, :, 0]
+            else:
+                lin_acc_des = torch.zeros_like(lin_vel_des)
+                ang_acc_des = torch.zeros_like(ang_vel_des)
 
             full_state = torch.cat(
                 [
@@ -1541,6 +1581,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                     self.crash_mask.view(-1, 1), # (num_envs, 1) [62], binary mask for "has crashed at some point in the episode"
                     lin_vel_des, # (num_envs, 3) [63-65]
                     ang_vel_des, # (num_envs, 3) [66-68]
+                    lin_acc_des, # (num_envs, 3) [69-71]
+                    ang_acc_des, # (num_envs, 3) [72-74]
                     # pos_traj,                                   # (num_envs, 3 * (horizon + 1)) [52-54] 
                     # yaw_traj,                                   # (num_envs, (horizon + 1)) [54-56]
 

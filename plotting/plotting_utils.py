@@ -15,6 +15,8 @@ params = {
     "crash_rate_slice" : slice(61,62),
     "lin_vel_des_slice" : slice(63,66),
     "ang_vel_des_slice" : slice(66,69),
+    "lin_acc_des_slice" : slice(69,72),
+    "ang_acc_des_slice" : slice(72,75),
 
     # Colors
     "rl_ee_color": "#56B4E9",
@@ -108,6 +110,25 @@ def get_peak_vel_rmse_per_trajectory(data):
     pos_rmse = torch.sqrt(torch.mean(pos_error ** 2, dim=1)).cpu()
     ori_rmse = torch.sqrt(torch.mean(ori_error ** 2, dim=1)).cpu()
     return lin_vel_peak, ang_vel_peak, pos_rmse, ori_rmse
+
+
+@torch.no_grad()
+def get_peak_acc_rmse_per_trajectory(data):
+    """Return per-trajectory (N,) arrays: peak desired acceleration magnitudes and RMSE of error."""
+    T = data.shape[1] - 1
+    pos_error = torch.norm(
+        data[:, :T, params["goal_pos_slice"]] - data[:, :T, params["ee_pos_slice"]], dim=-1
+    )
+    ori_error = isaac_math_utils.quat_error_magnitude(
+        data[:, :T, params["goal_ori_slice"]], data[:, :T, params["ee_ori_slice"]]
+    )
+    lin_acc_norm = torch.norm(data[:, :T, params["lin_acc_des_slice"]], dim=-1)
+    ang_acc_norm = torch.norm(data[:, :T, params["ang_acc_des_slice"]], dim=-1)
+    lin_acc_peak = lin_acc_norm.max(dim=1).values.cpu()
+    ang_acc_peak = ang_acc_norm.max(dim=1).values.cpu()
+    pos_rmse = torch.sqrt(torch.mean(pos_error ** 2, dim=1)).cpu()
+    ori_rmse = torch.sqrt(torch.mean(ori_error ** 2, dim=1)).cpu()
+    return lin_acc_peak, ang_acc_peak, pos_rmse, ori_rmse
 
 
 @torch.no_grad()

@@ -35,7 +35,7 @@ from isaaclab.utils.math import (
     wrap_to_pi,
 )
 
-from configs.aerial_manip_asset import AERIAL_MANIPULATOR_2DOF_CFG
+from configs.aerial_manip_asset import AERIAL_MANIPULATOR_2DOF_BLADE_PROPS_CFG, AERIAL_MANIPULATOR_2DOF_CFG
 from utils.math_utilities import calculate_required_pos, yaw_from_quat, quat_from_yaw
 
 from isaaclab.managers import EventTermCfg as EventTerm
@@ -615,6 +615,7 @@ class BallThrowEnv(AerialManipulatorTrajectoryTrackingEnv):
         )
         if through_hoop.any():
             self.set_hoop_color(through_hoop.nonzero(as_tuple=False).squeeze(-1), (0.0, 1.0, 0.0))
+            print(through_hoop.nonzero())
         self._ball_passed_through_hoop = self._ball_passed_through_hoop | through_hoop
 
         reward = through_hoop.float() * self.cfg.ball_through_hoop_reward

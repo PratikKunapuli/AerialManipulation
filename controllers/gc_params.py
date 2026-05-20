@@ -473,4 +473,31 @@ gc_params_dict = {
             "log_dir": "./logs/baseline_2dof_traj_tracking_ff_flatness_optim/",
         },
     },
+
+    # COM Control - Trajectory Tracking base (no motor dynamics or end effector mass) - optimized params with optimization process including instantaneous desired shape vector in the feedback calculations
+    "Isaac-AerialManipulator-2DOF-TrajectoryTracking-v0" : {
+        "log_dir": "./logs/baseline_2dof_traj_tracking_ff_flatness_optim_with_shape_vector/",
+        "controller_params": {
+            'kp_pos_gain_xy': 9.703322736494506,
+            'kp_pos_gain_z': 14.831922126868978,
+            'kd_pos_gain_xy': 4.596503988155108,
+            'kd_pos_gain_z': 2.8619388565284054,
+            'kp_att_gain_xy': 156.67289956175446,
+            'kp_att_gain_z': 18.426556946853765,
+            'kd_att_gain_xy': 18.709937139249547,
+            'kd_att_gain_z': 2.458457349398905,
+            'kp_shoulder_gain': 69.38647563051947,
+            'kd_shoulder_gain': 31.577389673938224,
+            'ki_shoulder_gain': 3.103688760846274,
+            'kp_wrist_gain': 17.43497326070569,
+            'kd_wrist_gain': 7.1193428230643185,
+            'ki_wrist_gain': 0.0719445848641339,
+            "feed_forward": True,
+            "urdf_path": "../models/uam_2dof_ee_mass_pin.urdf", # path relative to controllers/decoupled_controller.py
+            "disable_gravity": False,
+            "use_com_control": True,
+            "use_integral": True,
+            "log_dir": "./logs/baseline_2dof_traj_tracking_ff_flatness_optim/",
+        },
+    },
 }
