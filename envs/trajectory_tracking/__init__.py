@@ -18,6 +18,7 @@ from .trajectory_tracking_env_2dof import (
     AerialManipulatorWithMotorDynamicsCfg,
     AerialManipulatorWithEndEffectorMassCfg,
     AerialManipulatorWithMotorDynamicsAndEndEffectorMassCfg,
+    AerialManipulator2DOF_CTBR_EnvCfg,
 )
 from . import agents
 
@@ -182,6 +183,22 @@ gym.register(
 
 
 
+
+
+
+gym.register(
+    id="Isaac-AerialManipulator-2DOF-TrajectoryTracking-CTBR-v0",
+    entry_point="envs.trajectory_tracking.trajectory_tracking_env_2dof:AerialManipulatorTrajectoryTrackingEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": AerialManipulator2DOF_CTBR_EnvCfg,
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+        "rsl_rl_cfg_entry_point": agents.rsl_rl_ppo_cfg.AerialManipulator2DOFPPORunnerCfg,
+        "skrl_cfg_entry_point": f"{agents.__name__}:skrl_ppo_cfg.yaml",
+        "sb3_cfg_entry_point": f"{agents.__name__}:sb3_ppo_cfg.yaml",
+        "cleanrl_cfg_entry_point": f"{agents.__name__}:cleanrl_ppo_cfg.yaml",
+    },
+)
 
 
 # gym.register(
