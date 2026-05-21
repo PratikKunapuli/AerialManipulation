@@ -518,6 +518,8 @@ class AerialManipulatorWithMotorDynamicsAndEndEffectorMassCfg(AerialManipulator2
 
     use_motor_dynamics = True
     events = EventCfg()
+     
+    action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
 
 
 # ---------------------------------------------------------------------------
@@ -1090,7 +1092,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
             # --- 3. Filtered angular acceleration estimate ---------------
             # Finite difference over one physics step, then IIR low-pass.
-            dt = self.physics_dt
+            dt = 1 / self.cfg.policy_rate_hz
             ang_accel_raw = (ang_vel_b - self._prev_ang_vel_b) / dt  # (N, 3)
             alpha = self.cfg.indi_filter_alpha
             self._ang_accel_filt_b = (
