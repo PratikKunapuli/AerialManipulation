@@ -1593,6 +1593,14 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         else:
             previous_velocities = torch.zeros(self.num_envs, 0, device=self.device)
 
+        if self.cfg.control_mode == "CTBR":
+            # explicitly specify joint angles
+            ee_to_body_ori_representation  = torch.cat([
+                shoulder_joint_pos,
+                wrist_joint_pos,
+            ], dim=-1)
+            ee_to_body_ori_representation /= self.cfg.joint_pos_scale
+
         obs = torch.cat(
             [
                 pos_error_b,                                # (num_envs, 3) [0-2]
