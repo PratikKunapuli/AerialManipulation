@@ -317,12 +317,14 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
 
     # -----------------------------------------------------------------------
     # CTBR mode: INDI attitude inner-loop gains
-    # kp_bodyrate  — proportional gain on body-rate error [rad/s² per rad/s]
-    # kd_bodyrate  — derivative gain (damps the angular acceleration estimate)
+    # kp_bodyrate_xy/z — proportional gain on body-rate error [rad/s² per rad/s]
+    # kd_bodyrate_xy/z — derivative gain (damps the angular acceleration estimate)
     # indi_filter_alpha — 1st-order IIR on Ω̇ estimate; 0=no memory, 1=no update
     # -----------------------------------------------------------------------
-    kp_bodyrate:        float = 6.0
-    kd_bodyrate:        float = 0.5
+    kp_bodyrate_xy:     float = 6.0
+    kd_bodyrate_xy:     float = 0.5
+    kp_bodyrate_z:      float = 6.0
+    kd_bodyrate_z:      float = 0.5
     indi_filter_alpha:  float = 0.8
 
     # -----------------------------------------------------------------------
@@ -331,8 +333,10 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     # position error so the controller always takes the shorter arc.
     # joint_pos_scale maps the normalised action [-1,1] → [-π, π].
     # -----------------------------------------------------------------------
-    kp_joint:        float = 300.0
-    kd_joint:        float = 20.0
+    kp_joint_shoulder:  float = 300.0
+    kd_joint_shoulder:  float = 20.0
+    kp_joint_wrist:     float = 300.0
+    kd_joint_wrist:     float = 20.0
     joint_pos_scale: float = float(np.pi)
 
     goal_pos_range = 2.0
@@ -562,13 +566,17 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     body_rate_scale_z:  float = 1.5
 
     # INDI tuning
-    kp_bodyrate:       float = 6.0
-    kd_bodyrate:       float = 0.5
+    kp_bodyrate_xy:    float = 4.0
+    kd_bodyrate_xy:    float = 1.0
+    kp_bodyrate_z:     float = 2.0
+    kd_bodyrate_z:     float = 1.0
     indi_filter_alpha: float = 0.8   # IIR coefficient; closer to 1 = more smoothing
 
     # Joint PD — joints are continuous [-pi, pi]; wrap_to_pi applied to error
-    kp_joint:        float = 300.0   # Nm/rad
-    kd_joint:        float = 20.0    # Nm.s/rad
+    kp_joint_shoulder: float = 1.0   # Nm/rad
+    kd_joint_shoulder: float = 0.2    # Nm.s/rad
+    kp_joint_wrist:    float = 1e-3   # Nm/rad
+    kd_joint_wrist:    float = 2e-4    # Nm.s/rad
     joint_pos_scale: float = float(np.pi)  # action [-1,1] -> [-pi, pi] rad
 
 class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
@@ -1100,10 +1108,18 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             )
 
             # --- 4. INDI virtual control ---------------------------------
-            # ν = Kp*(Ω_des - Ω) - Kd*Ω̇_f
+            # ν = Kp*(Ω_des - Ω) - Kd*Ω̇_f  (separate gains for roll/pitch vs yaw)
+            kp_bodyrate = torch.tensor(
+                [self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_z],
+                device=self.device,
+            )
+            kd_bodyrate = torch.tensor(
+                [self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_z],
+                device=self.device,
+            )
             nu_b = (
-                self.cfg.kp_bodyrate * (rate_des_b - ang_vel_b)
-                - self.cfg.kd_bodyrate * self._ang_accel_filt_b
+                kp_bodyrate * (rate_des_b - ang_vel_b)
+                - kd_bodyrate * self._ang_accel_filt_b
             )  # (N, 3) desired angular acceleration
 
             # --- 5. Incremental moment: ΔM = Iv · (ν − Ω̇_f) -----------
@@ -1142,8 +1158,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
                 shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos)
                 shoulder_tau = (
-                    self.cfg.kp_joint * shoulder_err
-                    - self.cfg.kd_joint * shoulder_vel
+                    self.cfg.kp_joint_shoulder * shoulder_err
+                    - self.cfg.kd_joint_shoulder * shoulder_vel
                 ).clamp(-self.cfg.shoulder_torque_scalar, self.cfg.shoulder_torque_scalar)
                 self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
 
@@ -1153,8 +1169,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 wrist_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx]
                 wrist_err = wrap_to_pi(wrist_des - wrist_pos)
                 wrist_tau = (
-                    self.cfg.kp_joint * wrist_err
-                    - self.cfg.kd_joint * wrist_vel
+                    self.cfg.kp_joint_wrist * wrist_err
+                    - self.cfg.kd_joint_wrist * wrist_vel
                 ).clamp(-self.cfg.wrist_torque_scalar, self.cfg.wrist_torque_scalar)
                 self._joint_torques[:, self._wrist_joint_idx] = wrist_tau
 
