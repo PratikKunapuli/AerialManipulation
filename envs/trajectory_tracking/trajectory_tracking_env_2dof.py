@@ -552,7 +552,7 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
 
     # Motor dynamics always on for CTBR: wrench is routed through first-order
     # rotor speed dynamics so the physics matches real actuator bandwidth.
-    use_motor_dynamics: bool = True
+    # use_motor_dynamics: bool = True
 
     # Randomise end-effector payload mass on every episode reset.
     events = EventCfg()
