@@ -305,7 +305,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     # attitude_scale_xy = 0.2
     # attitude_scale_z = torch.pi - 1e-6
 
-    # CTBR inner-loop rate (INDI attitude + joint PID). Policy rate is unchanged;
+    # CTBR inner-loop rate (attitude INDI + joint PID). Policy rate is unchanged;
     # inner_loop_decimation controls how often those loops run within each policy step.
     inner_loop_rate_hz = sim_rate_hz
     inner_loop_decimation = sim_rate_hz // inner_loop_rate_hz
@@ -317,10 +317,12 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     body_rate_scale_z:  float = 1.5   # rad/s for yaw rate commands
 
     # -----------------------------------------------------------------------
-    # CTBR mode: INDI attitude inner-loop gains
-    # kp_bodyrate_xy/z — proportional gain on body-rate error [rad/s² per rad/s]
-    # kd_bodyrate_xy/z — derivative gain (damps the angular acceleration estimate)
-    # indi_filter_alpha — 1st-order IIR on Ω̇ estimate; 0=no memory, 1=no update
+    # CTBR mode: attitude control = rigid-body feedforward + INDI increment.
+    #   nu = Kp*(Omega_des - Omega) - Kd*Omega_dot_filt   (desired angular accel)
+    #   M_ff = I @ nu + Omega x (I @ Omega)                (nominal quadrotor)
+    #   dM = I @ (nu - Omega_dot_filt)                     (arm disturbance INDI)
+    #   M = M_ff + dM
+    # indi_filter_alpha — 1st-order IIR on measured Omega_dot; 0=no memory, 1=no update
     # -----------------------------------------------------------------------
     kp_bodyrate_xy:     float = 6.0
     kd_bodyrate_xy:     float = 0.5
@@ -533,14 +535,14 @@ class AerialManipulatorWithMotorDynamicsAndEndEffectorMassCfg(AerialManipulator2
 
 # ---------------------------------------------------------------------------
 # CTBR variant: policy outputs collective thrust + body-rate setpoints +
-# joint position targets.  An INDI rate controller handles the quadrotor base
-# and a joint-PID controller handles the arm, both in _apply_action at
-# inner_loop_rate_hz (decimated within each policy step).
+# joint position targets.  Attitude uses rigid-body feedforward plus an INDI
+# increment for arm-induced rotational disturbances; joint PID handles the arm.
+# Both run in _apply_action at inner_loop_rate_hz (decimated per policy step).
 # ---------------------------------------------------------------------------
 @configclass
 class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingEnvCfg):
     """
-    2-DOF DSAM with CTBR + INDI inner-loop + joint position PID controller.
+    2-DOF DSAM with CTBR + INDI attitude inner-loop + joint position PID controller.
 
     Action layout (6-dim, all normalised to [-1, 1]):
         [0]  collective thrust     (-> [0, thrust_to_weight * weight])
@@ -565,18 +567,19 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     # use_motor_dynamics: bool = True
 
     # Randomise end-effector payload mass on every episode reset.
-    events = EventCfg()
+    # events = EventCfg()
+    events = NoEndEffectorEventCfg()
 
     # Body-rate scaling: normalised action [-1,1] -> rad/s
     body_rate_scale_xy: float = 5.0
     body_rate_scale_z:  float = 2.5
 
-    # INDI tuning
-    kp_bodyrate_xy:    float = 100.0
-    kd_bodyrate_xy:    float = 30.0
-    kp_bodyrate_z:     float = 20.0
-    kd_bodyrate_z:     float = 10.0
-    indi_filter_alpha: float = 0.8   # IIR coefficient; closer to 1 = more smoothing
+    # INDI / rate-to-accel virtual control (nu)
+    kp_bodyrate_xy:    float = 4.0
+    kd_bodyrate_xy:    float = 1.0
+    kp_bodyrate_z:     float = 2.0
+    kd_bodyrate_z:     float = 1.0
+    indi_filter_alpha: float = 0.8
 
     # Inner loops run every physics step (sim_rate_hz == inner_loop_rate_hz)
     sim_rate_hz = 100
@@ -618,14 +621,12 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self._motor_speeds_des = torch.zeros(self.num_envs, 4, device=self.device)
         self._previous_omega_err = torch.zeros(self.num_envs, 3, device=self.device)
 
-        # CTBR / INDI inner-loop state buffers (only actively used when
-        # control_mode == "CTBR", but always allocated so that _reset_idx
-        # can zero them unconditionally without a mode check).
-        #   _prev_ang_vel_b       — body angular velocity at previous inner-loop step (body frame)
-        #   _ang_accel_filt_b     — low-pass filtered angular acceleration estimate (body frame)
+        # CTBR inner-loop state (always allocated so _reset_idx can zero unconditionally).
+        #   _prev_ang_vel_b         — body rate at previous inner-loop step (body frame)
+        #   _ang_accel_filt_b       — filtered measured body angular acceleration (body frame)
         #   _joint_pos_err_integral — integrated joint position error [shoulder, wrist] (rad*s)
-        self._prev_ang_vel_b    = torch.zeros(self.num_envs, 3, device=self.device)
-        self._ang_accel_filt_b  = torch.zeros(self.num_envs, 3, device=self.device)
+        self._prev_ang_vel_b = torch.zeros(self.num_envs, 3, device=self.device)
+        self._ang_accel_filt_b = torch.zeros(self.num_envs, 3, device=self.device)
         self._joint_pos_err_integral = torch.zeros(self.num_envs, 2, device=self.device)
         self.inner_loop_counter = 0
 
@@ -1081,28 +1082,29 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         return motor_speeds_des
 
     def _apply_ctbr_inner_loops(self):
-        """INDI attitude control and joint PID at inner_loop_rate_hz."""
-        # --- 1. Decode desired body rates ----------------------------
+        """Rigid-body attitude feedforward + INDI increment + joint PID at inner_loop_rate_hz."""
+        # --- 1. Desired body rates from policy actions -----------------
         rate_des_b = torch.stack([
             self._actions[:, 1] * self.cfg.body_rate_scale_xy,  # p_des [rad/s]
             self._actions[:, 2] * self.cfg.body_rate_scale_xy,  # q_des [rad/s]
             self._actions[:, 3] * self.cfg.body_rate_scale_z,   # r_des [rad/s]
         ], dim=-1)  # (N, 3)
 
-        # --- 2. Current body angular velocity in body frame ----------
+        # --- 2. Current body angular velocity in body frame ------------
         body_ori_w = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)  # (N, 4)
         ang_vel_w  = self._robot.data.body_ang_vel_w[:, self._body_id].squeeze(1)  # (N, 3)
-        ang_vel_b  = quat_apply_inverse(body_ori_w, ang_vel_w)  # (N, 3) body frame
+        ang_vel_b  = quat_apply_inverse(body_ori_w, ang_vel_w)  # (N, 3)
 
-        # --- 3. Filtered angular acceleration estimate ---------------
+        # --- 3. Filtered measured body angular acceleration ------------
         dt_inner = 1.0 / self.cfg.inner_loop_rate_hz
-        ang_accel_raw = (ang_vel_b - self._prev_ang_vel_b) / dt_inner  # (N, 3)
+        ang_accel_raw = (ang_vel_b - self._prev_ang_vel_b) / dt_inner
         alpha = self.cfg.indi_filter_alpha
         self._ang_accel_filt_b = (
             alpha * self._ang_accel_filt_b + (1.0 - alpha) * ang_accel_raw
         )
+        self._prev_ang_vel_b = ang_vel_b.clone()
 
-        # --- 4. INDI virtual control ---------------------------------
+        # --- 4. Desired angular acceleration (virtual control nu) ------
         kp_bodyrate = torch.tensor(
             [self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_z],
             device=self.device,
@@ -1111,35 +1113,30 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             [self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_z],
             device=self.device,
         )
-        nu_b = (
+        omega_dot_des = (
             kp_bodyrate * (rate_des_b - ang_vel_b)
             - kd_bodyrate * self._ang_accel_filt_b
-        )  # (N, 3) desired angular acceleration
+        )  # (N, 3)
 
-        # --- 5. Incremental moment: ΔM = Iv · (ν − Ω̇_f) -----------
-        delta_accel = nu_b - self._ang_accel_filt_b  # (N, 3)
-        delta_M = torch.bmm(
+        # --- 5. Nominal feedforward: M_ff = I @ nu + omega x (I @ omega) -
+        Iv_omega = torch.bmm(self.inertia_tensor, ang_vel_b.unsqueeze(-1)).squeeze(-1)
+        M_ff = torch.bmm(self.inertia_tensor, omega_dot_des.unsqueeze(-1)).squeeze(-1)
+        M_ff += torch.linalg.cross(ang_vel_b, Iv_omega)
+
+        # --- 6. INDI increment: dM = I @ (nu - Omega_dot_meas) ---------
+        # Compensates arm-induced mismatch between commanded and actual angular accel.
+        delta_M_indi = torch.bmm(
             self.inertia_tensor,
-            delta_accel.unsqueeze(-1)
-        ).squeeze(-1)  # (N, 3)
+            (omega_dot_des - self._ang_accel_filt_b).unsqueeze(-1),
+        ).squeeze(-1)
 
-        # --- 6. Gyroscopic cancellation: subtract Ω × (Iv·Ω) -------
-        IvOmega = torch.bmm(
-            self.inertia_tensor, ang_vel_b.unsqueeze(-1)
-        ).squeeze(-1)  # (N, 3)
-        gyro = torch.linalg.cross(ang_vel_b, IvOmega)  # (N, 3)
+        M_cmd = M_ff + delta_M_indi
 
-        M_cmd = delta_M - gyro  # (N, 3)
-
-        # --- 7. Write moments into wrench buffer ---------------------
         self._wrench_des[:, 1] = M_cmd[:, 0].clamp(-self.cfg.moment_scale_xy, self.cfg.moment_scale_xy)
         self._wrench_des[:, 2] = M_cmd[:, 1].clamp(-self.cfg.moment_scale_xy, self.cfg.moment_scale_xy)
         self._wrench_des[:, 3] = M_cmd[:, 2].clamp(-self.cfg.moment_scale_z,  self.cfg.moment_scale_z)
 
-        # --- 8. Update INDI history for next inner-loop step ---------
-        self._prev_ang_vel_b = ang_vel_b.clone()
-
-        # --- 9. Joint position PID controller ------------------------
+        # --- 7. Joint position PID controller ------------------------
         if self.cfg.num_joints > 0:
             shoulder_des = self._actions[:, 4] * self.cfg.joint_pos_scale  # (N,) rad
             shoulder_pos = wrap_to_pi(self._robot.data.joint_pos[:, self._shoulder_joint_idx]) # wrap bc continuous joint can give |theta| > pi
@@ -1200,7 +1197,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # ---------------------------------------------------------------
         # CTBR: policy commands desired body rates and joint positions.
-        # INDI + joint PID run in _apply_action at inner_loop_rate_hz.
+        # Attitude feedforward + INDI + joint PID run in _apply_action at inner_loop_rate_hz.
         # ---------------------------------------------------------------
         elif self.cfg.control_mode == "CTBR":
             self.inner_loop_counter = 0
@@ -2261,9 +2258,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self._previous_actions[env_ids] = 0.0
         self.end_effector_mass[env_ids] = self._robot.root_physx_view.get_masses().to(self.device)[env_ids, self._ee_id, None]
 
-        # Reset CTBR / INDI inner-loop history so stale derivatives from the
-        # previous episode do not corrupt the first step of the new one.
-        self._prev_ang_vel_b[env_ids]   = 0.0
+        # Reset CTBR inner-loop state
+        self._prev_ang_vel_b[env_ids] = 0.0
         self._ang_accel_filt_b[env_ids] = 0.0
         self._joint_pos_err_integral[env_ids] = 0.0
 
