@@ -296,7 +296,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     combined_scale = 0.0
 
     # Control mode: "CTBM" (collective thrust + body moments, default)
-    #               "CTBR" (collective thrust + body rates via INDI + joint position PD)
+    #               "CTBR" (collective thrust + body rates via INDI + joint position PID)
     control_mode = "CTBM"
 
     # CTATT inner-loop PD gains (only active when control_mode == "CTATT")
@@ -305,9 +305,10 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     # attitude_scale_xy = 0.2
     # attitude_scale_z = torch.pi - 1e-6
 
-    # PD attitude loop runs at sim_rate_hz; pd_loop_decimation=1 means every physics step
-    # pd_loop_rate_hz = sim_rate_hz
-    # pd_loop_decimation = sim_rate_hz // pd_loop_rate_hz
+    # CTBR inner-loop rate (INDI attitude + joint PID). Policy rate is unchanged;
+    # inner_loop_decimation controls how often those loops run within each policy step.
+    inner_loop_rate_hz = sim_rate_hz
+    inner_loop_decimation = sim_rate_hz // inner_loop_rate_hz
 
     # -----------------------------------------------------------------------
     # CTBR mode: body-rate scaling (maps normalised action [-1,1] to rad/s)
@@ -328,15 +329,19 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     indi_filter_alpha:  float = 0.8
 
     # -----------------------------------------------------------------------
-    # CTBR mode: joint position PD controller.
+    # CTBR mode: joint position PID controller.
     # Joints are continuous, range [-π, π].  wrap_to_pi is applied to the
     # position error so the controller always takes the shorter arc.
     # joint_pos_scale maps the normalised action [-1,1] → [-π, π].
     # -----------------------------------------------------------------------
     kp_joint_shoulder:  float = 300.0
+    ki_joint_shoulder:  float = 0.0
     kd_joint_shoulder:  float = 20.0
+    i_limit_joint_shoulder: float = 0.0
     kp_joint_wrist:     float = 300.0
+    ki_joint_wrist:     float = 0.0
     kd_joint_wrist:     float = 20.0
+    i_limit_joint_wrist: float = 0.0
     joint_pos_scale: float = float(np.pi)
 
     goal_pos_range = 2.0
@@ -529,12 +534,13 @@ class AerialManipulatorWithMotorDynamicsAndEndEffectorMassCfg(AerialManipulator2
 # ---------------------------------------------------------------------------
 # CTBR variant: policy outputs collective thrust + body-rate setpoints +
 # joint position targets.  An INDI rate controller handles the quadrotor base
-# and a joint-PD controller handles the arm, both in _pre_physics_step.
+# and a joint-PID controller handles the arm, both in _apply_action at
+# inner_loop_rate_hz (decimated within each policy step).
 # ---------------------------------------------------------------------------
 @configclass
 class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingEnvCfg):
     """
-    2-DOF DSAM with CTBR + INDI inner-loop + joint position PD controller.
+    2-DOF DSAM with CTBR + INDI inner-loop + joint position PID controller.
 
     Action layout (6-dim, all normalised to [-1, 1]):
         [0]  collective thrust     (-> [0, thrust_to_weight * weight])
@@ -562,21 +568,30 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     events = EventCfg()
 
     # Body-rate scaling: normalised action [-1,1] -> rad/s
-    body_rate_scale_xy: float = 3.0
-    body_rate_scale_z:  float = 1.5
+    body_rate_scale_xy: float = 5.0
+    body_rate_scale_z:  float = 2.5
 
     # INDI tuning
-    kp_bodyrate_xy:    float = 4.0
-    kd_bodyrate_xy:    float = 1.0
-    kp_bodyrate_z:     float = 2.0
-    kd_bodyrate_z:     float = 1.0
+    kp_bodyrate_xy:    float = 100.0
+    kd_bodyrate_xy:    float = 30.0
+    kp_bodyrate_z:     float = 20.0
+    kd_bodyrate_z:     float = 10.0
     indi_filter_alpha: float = 0.8   # IIR coefficient; closer to 1 = more smoothing
 
-    # Joint PD — joints are continuous [-pi, pi]; wrap_to_pi applied to error
-    kp_joint_shoulder: float = 1.0   # Nm/rad
-    kd_joint_shoulder: float = 0.2    # Nm.s/rad
-    kp_joint_wrist:    float = 1e-3   # Nm/rad
-    kd_joint_wrist:    float = 2e-4    # Nm.s/rad
+    # Inner loops run every physics step (sim_rate_hz == inner_loop_rate_hz)
+    sim_rate_hz = 100
+    inner_loop_rate_hz = sim_rate_hz
+    inner_loop_decimation = sim_rate_hz // inner_loop_rate_hz
+
+    # Joint PID — joints are continuous [-pi, pi]; wrap_to_pi applied to error
+    kp_joint_shoulder: float = 1.0      # Nm/rad
+    ki_joint_shoulder: float = 0.05     # Nm/(rad*s)
+    kd_joint_shoulder: float = 0.2     # Nm.s/rad
+    i_limit_joint_shoulder: float = 5.0 # rad*s (integral state clamp)
+    kp_joint_wrist:    float = 1e-3     # Nm/rad
+    ki_joint_wrist:    float = 1e-4     # Nm/(rad*s)
+    kd_joint_wrist:    float = 2e-4     # Nm.s/rad
+    i_limit_joint_wrist: float = 5.0    # rad*s
     joint_pos_scale: float = float(np.pi)  # action [-1,1] -> [-pi, pi] rad
 
 class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
@@ -606,10 +621,13 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # CTBR / INDI inner-loop state buffers (only actively used when
         # control_mode == "CTBR", but always allocated so that _reset_idx
         # can zero them unconditionally without a mode check).
-        #   _prev_ang_vel_b       — body angular velocity at previous physics step (body frame)
+        #   _prev_ang_vel_b       — body angular velocity at previous inner-loop step (body frame)
         #   _ang_accel_filt_b     — low-pass filtered angular acceleration estimate (body frame)
+        #   _joint_pos_err_integral — integrated joint position error [shoulder, wrist] (rad*s)
         self._prev_ang_vel_b    = torch.zeros(self.num_envs, 3, device=self.device)
         self._ang_accel_filt_b  = torch.zeros(self.num_envs, 3, device=self.device)
+        self._joint_pos_err_integral = torch.zeros(self.num_envs, 2, device=self.device)
+        self.inner_loop_counter = 0
 
         # Goal State   
         self._desired_pos_w = torch.zeros(self.num_envs, 3, device=self.device)
@@ -1062,6 +1080,108 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         motor_speeds_des = motor_speeds_des.clamp(self.cfg.motor_speed_min, self.cfg.motor_speed_max)
         return motor_speeds_des
 
+    def _apply_ctbr_inner_loops(self):
+        """INDI attitude control and joint PID at inner_loop_rate_hz."""
+        # --- 1. Decode desired body rates ----------------------------
+        rate_des_b = torch.stack([
+            self._actions[:, 1] * self.cfg.body_rate_scale_xy,  # p_des [rad/s]
+            self._actions[:, 2] * self.cfg.body_rate_scale_xy,  # q_des [rad/s]
+            self._actions[:, 3] * self.cfg.body_rate_scale_z,   # r_des [rad/s]
+        ], dim=-1)  # (N, 3)
+
+        # --- 2. Current body angular velocity in body frame ----------
+        body_ori_w = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)  # (N, 4)
+        ang_vel_w  = self._robot.data.body_ang_vel_w[:, self._body_id].squeeze(1)  # (N, 3)
+        ang_vel_b  = quat_apply_inverse(body_ori_w, ang_vel_w)  # (N, 3) body frame
+
+        # --- 3. Filtered angular acceleration estimate ---------------
+        dt_inner = 1.0 / self.cfg.inner_loop_rate_hz
+        ang_accel_raw = (ang_vel_b - self._prev_ang_vel_b) / dt_inner  # (N, 3)
+        alpha = self.cfg.indi_filter_alpha
+        self._ang_accel_filt_b = (
+            alpha * self._ang_accel_filt_b + (1.0 - alpha) * ang_accel_raw
+        )
+
+        # --- 4. INDI virtual control ---------------------------------
+        kp_bodyrate = torch.tensor(
+            [self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_z],
+            device=self.device,
+        )
+        kd_bodyrate = torch.tensor(
+            [self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_z],
+            device=self.device,
+        )
+        nu_b = (
+            kp_bodyrate * (rate_des_b - ang_vel_b)
+            - kd_bodyrate * self._ang_accel_filt_b
+        )  # (N, 3) desired angular acceleration
+
+        # --- 5. Incremental moment: ΔM = Iv · (ν − Ω̇_f) -----------
+        delta_accel = nu_b - self._ang_accel_filt_b  # (N, 3)
+        delta_M = torch.bmm(
+            self.inertia_tensor,
+            delta_accel.unsqueeze(-1)
+        ).squeeze(-1)  # (N, 3)
+
+        # --- 6. Gyroscopic cancellation: subtract Ω × (Iv·Ω) -------
+        IvOmega = torch.bmm(
+            self.inertia_tensor, ang_vel_b.unsqueeze(-1)
+        ).squeeze(-1)  # (N, 3)
+        gyro = torch.linalg.cross(ang_vel_b, IvOmega)  # (N, 3)
+
+        M_cmd = delta_M - gyro  # (N, 3)
+
+        # --- 7. Write moments into wrench buffer ---------------------
+        self._wrench_des[:, 1] = M_cmd[:, 0].clamp(-self.cfg.moment_scale_xy, self.cfg.moment_scale_xy)
+        self._wrench_des[:, 2] = M_cmd[:, 1].clamp(-self.cfg.moment_scale_xy, self.cfg.moment_scale_xy)
+        self._wrench_des[:, 3] = M_cmd[:, 2].clamp(-self.cfg.moment_scale_z,  self.cfg.moment_scale_z)
+
+        # --- 8. Update INDI history for next inner-loop step ---------
+        self._prev_ang_vel_b = ang_vel_b.clone()
+
+        # --- 9. Joint position PID controller ------------------------
+        if self.cfg.num_joints > 0:
+            shoulder_des = self._actions[:, 4] * self.cfg.joint_pos_scale  # (N,) rad
+            shoulder_pos = wrap_to_pi(self._robot.data.joint_pos[:, self._shoulder_joint_idx]) # wrap bc continuous joint can give |theta| > pi
+            shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
+            shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos)
+            self._joint_pos_err_integral[:, 0] += shoulder_err / self.cfg.inner_loop_rate_hz
+            print(f'[INFO]: shoulder_des, shoulder_pos, {shoulder_des}, {shoulder_pos}')
+            if self.cfg.i_limit_joint_shoulder > 0.0:
+                self._joint_pos_err_integral[:, 0] = self._joint_pos_err_integral[:, 0].clamp(
+                    -self.cfg.i_limit_joint_shoulder, self.cfg.i_limit_joint_shoulder
+                )
+            shoulder_tau = (
+                self.cfg.kp_joint_shoulder * shoulder_err
+                + self.cfg.ki_joint_shoulder * self._joint_pos_err_integral[:, 0]
+                - self.cfg.kd_joint_shoulder * shoulder_vel
+            ).clamp(-self.cfg.shoulder_torque_scalar, self.cfg.shoulder_torque_scalar)
+            print(f'[INFO]: shoulder_tau, {shoulder_tau}')
+            self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
+
+        if self.cfg.num_joints > 1:
+            wrist_des = self._actions[:, 5] * self.cfg.joint_pos_scale  # (N,) rad
+            wrist_pos = wrap_to_pi(self._robot.data.joint_pos[:, self._wrist_joint_idx]) # wrap bc continuous joint can give |theta| > pi
+            wrist_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx]
+            wrist_err = wrap_to_pi(wrist_des - wrist_pos)
+            self._joint_pos_err_integral[:, 1] += wrist_err / self.cfg.inner_loop_rate_hz
+            # print(f'[INFO]: wrist_des, wrist_pos, {wrist_des}, {wrist_pos}')
+            if self.cfg.i_limit_joint_wrist > 0.0:
+                self._joint_pos_err_integral[:, 1] = self._joint_pos_err_integral[:, 1].clamp(
+                    -self.cfg.i_limit_joint_wrist, self.cfg.i_limit_joint_wrist
+                )
+            wrist_tau = (
+                self.cfg.kp_joint_wrist * wrist_err
+                + self.cfg.ki_joint_wrist * self._joint_pos_err_integral[:, 1]
+                - self.cfg.kd_joint_wrist * wrist_vel
+            ).clamp(-self.cfg.wrist_torque_scalar, self.cfg.wrist_torque_scalar)
+            self._joint_torques[:, self._wrist_joint_idx] = wrist_tau
+            # print(f'[INFO]: wrist_tau, {wrist_tau}')
+        if self.cfg.use_motor_dynamics:
+            self._motor_speeds_des = self._compute_motor_speeds(self._wrench_des)
+        else:
+            self._body_forces[:, 0, 2] = self._wrench_des[:, 0]
+            self._body_moment[:, 0, :]  = self._wrench_des[:, 1:]
 
     def _pre_physics_step(self, actions: torch.Tensor):
         self._actions = actions.clone().clamp(-1.0, 1.0) # clamp the actions to [-1, 1]
@@ -1079,108 +1199,11 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             self._wrench_des[:, 3]   = self._actions[:, 3]   * self.cfg.moment_scale_z
 
         # ---------------------------------------------------------------
-        # CTBR: policy commands desired body rates; an INDI inner-loop
-        # converts rate error to a moment command.
-        #   action[1] = p_des, action[2] = q_des, action[3] = r_des
-        #   action[4] = shoulder_pos_des, action[5] = wrist_pos_des
+        # CTBR: policy commands desired body rates and joint positions.
+        # INDI + joint PID run in _apply_action at inner_loop_rate_hz.
         # ---------------------------------------------------------------
         elif self.cfg.control_mode == "CTBR":
-            # --- 1. Decode desired body rates ----------------------------
-            rate_des_b = torch.stack([
-                self._actions[:, 1] * self.cfg.body_rate_scale_xy,  # p_des [rad/s]
-                self._actions[:, 2] * self.cfg.body_rate_scale_xy,  # q_des [rad/s]
-                self._actions[:, 3] * self.cfg.body_rate_scale_z,   # r_des [rad/s]
-            ], dim=-1)  # (N, 3)
-
-            # --- 2. Current body angular velocity in body frame ----------
-            # The vehicle angular velocity is stored in world frame; rotate it.
-            body_ori_w = self._robot.data.body_quat_w[:, self._body_id].squeeze(1)  # (N, 4)
-            ang_vel_w  = self._robot.data.body_ang_vel_w[:, self._body_id].squeeze(1)  # (N, 3)
-            ang_vel_b  = quat_apply_inverse(body_ori_w, ang_vel_w)  # (N, 3) body frame
-
-            # --- 3. Filtered angular acceleration estimate ---------------
-            # Finite difference over one physics step, then IIR low-pass.
-            dt = 1 / self.cfg.policy_rate_hz
-            ang_accel_raw = (ang_vel_b - self._prev_ang_vel_b) / dt  # (N, 3)
-            alpha = self.cfg.indi_filter_alpha
-            self._ang_accel_filt_b = (
-                alpha * self._ang_accel_filt_b + (1.0 - alpha) * ang_accel_raw
-            )
-
-            # --- 4. INDI virtual control ---------------------------------
-            # ν = Kp*(Ω_des - Ω) - Kd*Ω̇_f  (separate gains for roll/pitch vs yaw)
-            kp_bodyrate = torch.tensor(
-                [self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_xy, self.cfg.kp_bodyrate_z],
-                device=self.device,
-            )
-            kd_bodyrate = torch.tensor(
-                [self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_xy, self.cfg.kd_bodyrate_z],
-                device=self.device,
-            )
-            nu_b = (
-                kp_bodyrate * (rate_des_b - ang_vel_b)
-                - kd_bodyrate * self._ang_accel_filt_b
-            )  # (N, 3) desired angular acceleration
-
-            # --- 5. Incremental moment: ΔM = Iv · (ν − Ω̇_f) -----------
-            # self.inertia_tensor is (N, 3, 3)
-            delta_accel = nu_b - self._ang_accel_filt_b  # (N, 3)
-            delta_M = torch.bmm(
-                self.inertia_tensor,
-                delta_accel.unsqueeze(-1)
-            ).squeeze(-1)  # (N, 3)
-
-            # --- 6. Gyroscopic cancellation: subtract Ω × (Iv·Ω) -------
-            IvOmega = torch.bmm(
-                self.inertia_tensor, ang_vel_b.unsqueeze(-1)
-            ).squeeze(-1)  # (N, 3)
-            gyro = torch.linalg.cross(ang_vel_b, IvOmega)  # (N, 3)
-
-            M_cmd = delta_M - gyro  # (N, 3)
-
-            # --- 7. Write moments into wrench buffer ---------------------
-            # Clamp to the same physical limits used in CTBM so the physics
-            # engine receives sensible values regardless of gain tuning.
-            self._wrench_des[:, 1] = M_cmd[:, 0].clamp(-self.cfg.moment_scale_xy, self.cfg.moment_scale_xy)
-            self._wrench_des[:, 2] = M_cmd[:, 1].clamp(-self.cfg.moment_scale_xy, self.cfg.moment_scale_xy)
-            self._wrench_des[:, 3] = M_cmd[:, 2].clamp(-self.cfg.moment_scale_z,  self.cfg.moment_scale_z)
-
-            # --- 8. Update INDI history for next step --------------------
-            self._prev_ang_vel_b = ang_vel_b.clone()
-
-            # --- 9. Joint position PD controller -------------------------
-            # action[4:6] are normalised desired joint positions in [-1, 1].
-            # Scaled to [-pi, pi] and then wrap_to_pi is applied to the
-            # position error so the controller uses the shortest arc.
-            if self.cfg.num_joints > 0:
-                shoulder_des = self._actions[:, 4] * self.cfg.joint_pos_scale  # (N,) rad
-                shoulder_pos = self._robot.data.joint_pos[:, self._shoulder_joint_idx]
-                shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
-                shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos)
-                shoulder_tau = (
-                    self.cfg.kp_joint_shoulder * shoulder_err
-                    - self.cfg.kd_joint_shoulder * shoulder_vel
-                ).clamp(-self.cfg.shoulder_torque_scalar, self.cfg.shoulder_torque_scalar)
-                self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
-
-            if self.cfg.num_joints > 1:
-                wrist_des = self._actions[:, 5] * self.cfg.joint_pos_scale  # (N,) rad
-                wrist_pos = self._robot.data.joint_pos[:, self._wrist_joint_idx]
-                wrist_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx]
-                wrist_err = wrap_to_pi(wrist_des - wrist_pos)
-                wrist_tau = (
-                    self.cfg.kp_joint_wrist * wrist_err
-                    - self.cfg.kd_joint_wrist * wrist_vel
-                ).clamp(-self.cfg.wrist_torque_scalar, self.cfg.wrist_torque_scalar)
-                self._joint_torques[:, self._wrist_joint_idx] = wrist_tau
-
-            # Early return: joint torques are already set above; skip the
-            # CTBM joint-torque block at the end of this method.
-            if self.cfg.use_motor_dynamics:
-                self._motor_speeds_des = self._compute_motor_speeds(self._wrench_des)
-            else:
-                self._body_forces[:, 0, 2] = self._wrench_des[:, 0]
-                self._body_moment[:, 0, :]  = self._wrench_des[:, 1:]
+            self.inner_loop_counter = 0
             return
 
         else:
@@ -1207,6 +1230,11 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         Apply joint torques, then propagate motor dynamics and apply the resulting
         propulsion wrench to the vehicle body.
         """
+        if self.cfg.control_mode == "CTBR":
+            if self.inner_loop_counter % self.cfg.inner_loop_decimation == 0:
+                self._apply_ctbr_inner_loops()
+            self.inner_loop_counter += 1
+
         if self.cfg.num_joints > 0:
             self._robot.set_joint_effort_target(self._joint_torques[:,self._shoulder_joint_idx], joint_ids=self._shoulder_joint_idx)
         if self.cfg.num_joints > 1:
@@ -1925,6 +1953,15 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         action_norm_error = torch.norm(actions, dim=1)
 
         action_delta = self._actions - self._previous_actions
+        # for CTBR control mode, joint actions are desired positions, so for calculating the delta, take into consideration the [-pi, pi] wrapping
+        if self.cfg.control_mode == "CTBR":
+            # convert[-1, 1] to actual angles
+            joint_action_delta = action_delta[:, -2:] * self.cfg.joint_pos_scale
+            joint_action_delta = wrap_to_pi(joint_action_delta) 
+            # rescale to [-1, 1]
+            joint_action_delta /= self.cfg.joint_pos_scale
+            action_delta[:, -2:] = joint_action_delta
+
         action_delta_error = torch.norm(action_delta, dim=1)
         action_delta_prop_error = torch.norm(action_delta[:, :4], dim=1)
         action_delta_joint_error = torch.norm(action_delta[:, -2:], dim=1)
@@ -2228,6 +2265,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # previous episode do not corrupt the first step of the new one.
         self._prev_ang_vel_b[env_ids]   = 0.0
         self._ang_accel_filt_b[env_ids] = 0.0
+        self._joint_pos_err_integral[env_ids] = 0.0
 
     def initialize_trajectories(self, env_ids):
         """
