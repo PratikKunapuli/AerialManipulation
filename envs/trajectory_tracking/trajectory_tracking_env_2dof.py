@@ -571,7 +571,24 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     events = NoEndEffectorEventCfg()
 
     # modified reward scales
+    body_pos_radius_start = 1.0
+    body_pos_radius_curriculum = 0 #int(1e7) # 10e6
+    body_pos_error_reward_scale = 0.0 # -1.0
+    body_pos_distance_reward_scale = 1.0 #15.0
+
+    ee_pos_radius_start = 1.0
+    ee_pos_radius_curriculum = 0
+    ee_pos_error_reward_scale = 0.0 # -1.0
+    ee_pos_distance_reward_scale = 10.0 #15.0
+
+    ori_radius_start = 1.5
+    ori_radius_curriculum = 0
+    ori_distance_reward_scale = 10.0 #15.0
+    ori_error_reward_scale = 0.0 # -0.5
+
     action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
+    previous_action_joint_reward_scale = -0.25
+
 
     # Body-rate scaling: normalised action [-1,1] -> rad/s
     body_rate_scale_xy: float = 10.0
@@ -590,9 +607,9 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     inner_loop_decimation = sim_rate_hz // inner_loop_rate_hz
 
     # Joint PID — joints are continuous [-pi, pi]; wrap_to_pi applied to error
-    kp_joint_shoulder: float = 1.0      # Nm/rad
+    kp_joint_shoulder: float = 2.0      # Nm/rad
     ki_joint_shoulder: float = 0.05     # Nm/(rad*s)
-    kd_joint_shoulder: float = 0.2     # Nm.s/rad
+    kd_joint_shoulder: float = 0.5     # Nm.s/rad
     i_limit_joint_shoulder: float = 5.0 # rad*s (integral state clamp)
     kp_joint_wrist:    float = 1e-3     # Nm/rad
     ki_joint_wrist:    float = 1e-4     # Nm/(rad*s)
