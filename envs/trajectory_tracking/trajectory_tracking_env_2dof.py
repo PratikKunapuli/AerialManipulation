@@ -340,6 +340,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     ki_joint_shoulder:  float = 0.0
     kd_joint_shoulder:  float = 20.0
     i_limit_joint_shoulder: float = 0.0
+    use_shoulder_gravity_comp: bool = True
     kp_joint_wrist:     float = 300.0
     ki_joint_wrist:     float = 0.0
     kd_joint_wrist:     float = 20.0
@@ -530,7 +531,6 @@ class AerialManipulatorWithMotorDynamicsAndEndEffectorMassCfg(AerialManipulator2
     use_motor_dynamics = True
     events = EventCfg()
      
-    action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
 
 
 # ---------------------------------------------------------------------------
@@ -570,13 +570,16 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     # events = EventCfg()
     events = NoEndEffectorEventCfg()
 
+    # modified reward scales
+    action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
+
     # Body-rate scaling: normalised action [-1,1] -> rad/s
-    body_rate_scale_xy: float = 5.0
+    body_rate_scale_xy: float = 10.0
     body_rate_scale_z:  float = 2.5
 
     # INDI / rate-to-accel virtual control (nu)
-    kp_bodyrate_xy:    float = 4.0
-    kd_bodyrate_xy:    float = 1.0
+    kp_bodyrate_xy:    float = 10.0
+    kd_bodyrate_xy:    float = 2.0
     kp_bodyrate_z:     float = 2.0
     kd_bodyrate_z:     float = 1.0
     indi_filter_alpha: float = 0.8
@@ -1073,6 +1076,15 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         self.polynomial_yaw_rand_ranges = torch.tensor(self.cfg.polynomial_yaw_rand_ranges, device=self.device).float()
 
 
+    def get_angle_to_horizontal(self, shoulder_angle: torch.Tensor, quad_ori_quat: torch.Tensor) -> torch.Tensor:
+        """Angle of the arm w.r.t. the horizontal plane (rad), shape (N,)."""
+        y_local_w = quat_apply(
+            quad_ori_quat,
+            torch.tensor([[0.0, 1.0, 0.0]], device=quad_ori_quat.device).tile(quad_ori_quat.shape[0], 1),
+        )
+        quad_tilt = torch.arcsin(torch.clamp(y_local_w[:, 2], -1.0 + 1e-8, 1.0 - 1e-8))
+        return quad_tilt - shoulder_angle
+
     def _compute_motor_speeds(self, wrench_des: torch.Tensor) -> torch.Tensor:
         """Convert a desired wrench [T, Mx, My, Mz] (num_envs, 4) to desired motor speeds (num_envs, 4)."""
         f_des = torch.matmul(self.TM_to_f, wrench_des.t()).t()
@@ -1139,9 +1151,10 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         # --- 7. Joint position PID controller ------------------------
         if self.cfg.num_joints > 0:
             shoulder_des = self._actions[:, 4] * self.cfg.joint_pos_scale  # (N,) rad
-            shoulder_pos = wrap_to_pi(self._robot.data.joint_pos[:, self._shoulder_joint_idx]) # wrap bc continuous joint can give |theta| > pi
+            shoulder_pos = self._robot.data.joint_pos[:, self._shoulder_joint_idx]
+            shoulder_pos_wrapped = wrap_to_pi(shoulder_pos)
             shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
-            shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos)
+            shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos_wrapped)
             self._joint_pos_err_integral[:, 0] += shoulder_err / self.cfg.inner_loop_rate_hz
             print(f'[INFO]: shoulder_des, shoulder_pos, {shoulder_des}, {shoulder_pos}')
             if self.cfg.i_limit_joint_shoulder > 0.0:
@@ -1152,7 +1165,18 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
                 self.cfg.kp_joint_shoulder * shoulder_err
                 + self.cfg.ki_joint_shoulder * self._joint_pos_err_integral[:, 0]
                 - self.cfg.kd_joint_shoulder * shoulder_vel
-            ).clamp(-self.cfg.shoulder_torque_scalar, self.cfg.shoulder_torque_scalar)
+            )
+            if self.cfg.use_shoulder_gravity_comp:
+                angle_to_horizontal = self.get_angle_to_horizontal(shoulder_pos, body_ori_w)
+                shoulder_tau = shoulder_tau + (
+                    self.arm_mass
+                    * self._gravity_magnitude
+                    * (self.arm_length / 2.0)
+                    * torch.cos(angle_to_horizontal)
+                )
+            shoulder_tau = shoulder_tau.clamp(
+                -self.cfg.shoulder_torque_scalar, self.cfg.shoulder_torque_scalar
+            )
             print(f'[INFO]: shoulder_tau, {shoulder_tau}')
             self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
 
