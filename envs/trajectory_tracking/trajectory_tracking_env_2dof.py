@@ -572,17 +572,17 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
 
     # modified reward scales
     body_pos_radius_start = 1.0
-    body_pos_radius_curriculum = 0 #int(1e7) # 10e6
+    body_pos_radius_curriculum = 75 #int(1e7) # 10e6
     body_pos_error_reward_scale = 0.0 # -1.0
     body_pos_distance_reward_scale = 1.0 #15.0
 
     ee_pos_radius_start = 1.0
-    ee_pos_radius_curriculum = 0
+    ee_pos_radius_curriculum = 75
     ee_pos_error_reward_scale = 0.0 # -1.0
     ee_pos_distance_reward_scale = 10.0 #15.0
 
     ori_radius_start = 1.5
-    ori_radius_curriculum = 0
+    ori_radius_curriculum = 150
     ori_distance_reward_scale = 10.0 #15.0
     ori_error_reward_scale = 0.0 # -0.5
 
