@@ -583,7 +583,7 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
 
     ori_radius_start = 1.5
     ori_radius_curriculum = 150
-    ori_distance_reward_scale = 10.0 #15.0
+    ori_distance_reward_scale = 12.0 #15.0
     ori_error_reward_scale = 0.0 # -0.5
 
     action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
@@ -607,13 +607,13 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     inner_loop_decimation = sim_rate_hz // inner_loop_rate_hz
 
     # Joint PID — joints are continuous [-pi, pi]; wrap_to_pi applied to error
-    kp_joint_shoulder: float = 2.0      # Nm/rad
+    kp_joint_shoulder: float = 0.5      # Nm/rad
     ki_joint_shoulder: float = 0.05     # Nm/(rad*s)
-    kd_joint_shoulder: float = 0.5     # Nm.s/rad
+    kd_joint_shoulder: float = 0.1     # Nm.s/rad
     i_limit_joint_shoulder: float = 5.0 # rad*s (integral state clamp)
-    kp_joint_wrist:    float = 1e-3     # Nm/rad
-    ki_joint_wrist:    float = 1e-4     # Nm/(rad*s)
-    kd_joint_wrist:    float = 2e-4     # Nm.s/rad
+    kp_joint_wrist:    float = 1e-2     # Nm/rad
+    ki_joint_wrist:    float = 1e-3     # Nm/(rad*s)
+    kd_joint_wrist:    float = 2e-3     # Nm.s/rad
     i_limit_joint_wrist: float = 5.0    # rad*s
     joint_pos_scale: float = float(np.pi)  # action [-1,1] -> [-pi, pi] rad
 
@@ -1173,7 +1173,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
             shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos_wrapped)
             self._joint_pos_err_integral[:, 0] += shoulder_err / self.cfg.inner_loop_rate_hz
-            print(f'[INFO]: shoulder_des, shoulder_pos, {shoulder_des}, {shoulder_pos}')
+            # print(f'[INFO]: shoulder_des, shoulder_pos, {shoulder_des}, {shoulder_pos}')
             if self.cfg.i_limit_joint_shoulder > 0.0:
                 self._joint_pos_err_integral[:, 0] = self._joint_pos_err_integral[:, 0].clamp(
                     -self.cfg.i_limit_joint_shoulder, self.cfg.i_limit_joint_shoulder
@@ -1194,7 +1194,7 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             shoulder_tau = shoulder_tau.clamp(
                 -self.cfg.shoulder_torque_scalar, self.cfg.shoulder_torque_scalar
             )
-            print(f'[INFO]: shoulder_tau, {shoulder_tau}')
+            # print(f'[INFO]: shoulder_tau, {shoulder_tau}')
             self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
 
         if self.cfg.num_joints > 1:
