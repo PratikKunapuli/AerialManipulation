@@ -332,9 +332,8 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
 
     # -----------------------------------------------------------------------
     # CTBR mode: joint position PID controller.
-    # Joints are continuous, range [-π, π].  wrap_to_pi is applied to the
-    # position error so the controller always takes the shorter arc.
-    # joint_pos_scale maps the normalised action [-1,1] → [-π, π].
+    # Policy commands a relative offset: e = wrap_to_pi(action * joint_pos_scale)
+    # (action=0 → hold, ±1 → ±π by default). P term is Kp * e.
     # -----------------------------------------------------------------------
     kp_joint_shoulder:  float = 300.0
     ki_joint_shoulder:  float = 0.0
@@ -549,8 +548,8 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
         [1]  desired roll rate     (-> [-body_rate_scale_xy, +body_rate_scale_xy] rad/s)
         [2]  desired pitch rate    (-> [-body_rate_scale_xy, +body_rate_scale_xy] rad/s)
         [3]  desired yaw rate      (-> [-body_rate_scale_z,  +body_rate_scale_z]  rad/s)
-        [4]  desired shoulder pos  (-> [-pi, pi] rad)
-        [5]  desired wrist pos     (-> [-pi, pi] rad)
+        [4]  shoulder pos offset  (q_des = q + action * joint_pos_scale)
+        [5]  wrist pos offset     (q_des = q + action * joint_pos_scale)
     """
     control_mode: str = "CTBR"
 
@@ -587,7 +586,7 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     ori_error_reward_scale = 0.0 # -0.5
 
     action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
-    previous_action_joint_reward_scale = -0.25
+    previous_action_joint_reward_scale = 0.0
 
 
     # Body-rate scaling: normalised action [-1,1] -> rad/s
@@ -615,7 +614,7 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     ki_joint_wrist:    float = 1e-3     # Nm/(rad*s)
     kd_joint_wrist:    float = 2e-3     # Nm.s/rad
     i_limit_joint_wrist: float = 5.0    # rad*s
-    joint_pos_scale: float = float(np.pi)  # action [-1,1] -> [-pi, pi] rad
+    joint_pos_scale: float = float(np.pi)  # action [-1,1] -> offset in [-pi, pi] rad
 
 class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
     cfg: AerialManipulatorTrajectoryTrackingEnvBaseCfg
@@ -1167,11 +1166,9 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         # --- 7. Joint position PID controller ------------------------
         if self.cfg.num_joints > 0:
-            shoulder_des = self._actions[:, 4] * self.cfg.joint_pos_scale  # (N,) rad
             shoulder_pos = self._robot.data.joint_pos[:, self._shoulder_joint_idx]
-            shoulder_pos_wrapped = wrap_to_pi(shoulder_pos)
             shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
-            shoulder_err = wrap_to_pi(shoulder_des - shoulder_pos_wrapped)
+            shoulder_err = wrap_to_pi(self._actions[:, 4] * self.cfg.joint_pos_scale)
             self._joint_pos_err_integral[:, 0] += shoulder_err / self.cfg.inner_loop_rate_hz
             # print(f'[INFO]: shoulder_des, shoulder_pos, {shoulder_des}, {shoulder_pos}')
             if self.cfg.i_limit_joint_shoulder > 0.0:
@@ -1198,10 +1195,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
 
         if self.cfg.num_joints > 1:
-            wrist_des = self._actions[:, 5] * self.cfg.joint_pos_scale  # (N,) rad
-            wrist_pos = wrap_to_pi(self._robot.data.joint_pos[:, self._wrist_joint_idx]) # wrap bc continuous joint can give |theta| > pi
             wrist_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx]
-            wrist_err = wrap_to_pi(wrist_des - wrist_pos)
+            wrist_err = wrap_to_pi(self._actions[:, 5] * self.cfg.joint_pos_scale)
             self._joint_pos_err_integral[:, 1] += wrist_err / self.cfg.inner_loop_rate_hz
             # print(f'[INFO]: wrist_des, wrist_pos, {wrist_des}, {wrist_pos}')
             if self.cfg.i_limit_joint_wrist > 0.0:
