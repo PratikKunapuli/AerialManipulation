@@ -84,7 +84,7 @@ def plot_error_pos_yaw(data1, data2, name1, name2=None, data3=None, name3=None, 
         pos_quantiles_3, yaw_quantiles_3 = plotting_utils.get_quantiles_error(data3, [0.25, 0.5, 0.75])
 
     if axs is None:
-        fig, axs = plt.subplots(1, 2, figsize=(7, 3.5), dpi=300)
+        fig, axs = plt.subplots(2, 1, figsize=(3.5, 7), dpi=300)
     axs = np.array(axs).reshape(-1)
     if axs.size != 2:
         raise ValueError("plot_error_pos_yaw expects exactly two axes.")
@@ -314,7 +314,7 @@ def plot_violin_rmse_settling_time(data1, data2, shortname1, shortname2=None, da
     split = n_methods == 2
 
     if axs is None:
-        fig, axs = plt.subplots(1, 2, figsize=(3.5, 3.5), dpi=300)
+        fig, axs = plt.subplots(2, 1, figsize=(3.5, 7), dpi=300)
     sns.violinplot(data=data, x="Method", y="Settling Time", hue="Type", inner="quart", split=split,
                    palette=[params['violin_color_1'], params['violin_color_2']], legend=False, ax=axs[0])
     axs[0].set_ylabel("Settling Time (s)")
@@ -417,6 +417,80 @@ def _style_3d_axes(ax):
     ax.grid(True)
 
 
+def _ratio_norm(z):
+    """TwoSlopeNorm centered at 1.0 so ratio==1 (equal RMSE) is the neutral color,
+    or None if the data doesn't straddle 1.0 (in which case a plain Normalize is used)."""
+    finite = z[np.isfinite(z)]
+    if finite.size == 0:
+        return None
+    vmin, vmax = finite.min(), finite.max()
+    if vmin < 1.0 < vmax:
+        from matplotlib.colors import TwoSlopeNorm
+        return TwoSlopeNorm(vcenter=1.0, vmin=vmin, vmax=vmax)
+    return None
+
+
+def _plot_error_vs_desired_grid(lin_np, ang_np, pos_error_np, ori_error_np, xlabel, ylabel,
+                                 output_prefix, suffix, color=None, is_ratio=False,
+                                 n_bins_lin=20, n_bins_ang=20):
+    """3D surface+scatter and contour figures of a per-trajectory quantity vs peak desired
+    velocity/acceleration magnitude. Used both for raw RMSE (color=solid color) and for the
+    RMSE ratio between two controllers (is_ratio=True, diverging colormap centered at 1.0)."""
+    if is_ratio:
+        pos_label_3d, ori_label_3d = "Position RMSE Ratio (C2/C1)", "Orientation RMSE Ratio (C2/C1)"
+        pos_label_c, ori_label_c = "Mean Position RMSE Ratio (C2/C1)", "Mean Orientation RMSE Ratio (C2/C1)"
+        surf_cmap = contour_cmap = "coolwarm"
+    else:
+        pos_label_3d, ori_label_3d = "Position RMSE (m)", "Orientation RMSE (rad)"
+        pos_label_c, ori_label_c = "Mean Position RMSE (m)", "Mean Orientation RMSE (rad)"
+        surf_cmap, contour_cmap = "magma", "rainbow"
+
+    # --- 3D figure: all N scatter points + binned mean surface ---
+    error_specs_3d = [(pos_error_np, pos_label_3d), (ori_error_np, ori_label_3d)]
+    fig_3d = plt.figure(figsize=(4.5, 10), dpi=300)
+    fig_3d.patch.set_facecolor("white")
+    for col_idx, (error_np, zlabel) in enumerate(error_specs_3d):
+        ax = fig_3d.add_subplot(2, 1, col_idx + 1, projection='3d')
+        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_np, ang_np, error_np, n_bins_lin, n_bins_ang)
+        Z_surf = np.pad(Z, ((0, 1), (0, 1)), mode='edge')
+        Z_surf_masked = np.ma.array(Z_surf, mask=np.isnan(Z_surf))
+        norm = _ratio_norm(error_np) if is_ratio else None
+        if is_ratio:
+            ax.scatter(lin_np, ang_np, error_np, alpha=0.3, s=3, c=error_np, cmap=surf_cmap, norm=norm)
+        else:
+            ax.scatter(lin_np, ang_np, error_np, alpha=0.3, s=3, c=color)
+        ax.plot_surface(X_edge, Y_edge, Z_surf_masked, alpha=0.65, cmap=surf_cmap, norm=norm)
+        ax.set_xlabel(xlabel, labelpad=6)
+        ax.set_ylabel(ylabel, labelpad=6)
+        ax.set_zlabel(zlabel, labelpad=6)
+        _style_3d_axes(ax)
+    fig_3d.tight_layout(pad=2.0)
+    fig_3d.subplots_adjust(left=0.08, right=0.96, bottom=0.04, top=0.96, hspace=0.22)
+    _save_fig(fig_3d, f"{output_prefix}_{suffix}_3d", use_tight_bbox=False)
+
+    # --- Contour figure ---
+    error_specs_c = [(pos_error_np, pos_label_c), (ori_error_np, ori_label_c)]
+    fig_c, axs_c = plt.subplots(2, 1, figsize=(4, 9), dpi=300)
+    n_levels = 20
+    for col_idx, (error_np, clabel) in enumerate(error_specs_c):
+        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_np, ang_np, error_np, n_bins_lin, n_bins_ang)
+        Z_masked = np.ma.array(Z, mask=np.isnan(Z))
+        norm = _ratio_norm(Z_masked.compressed()) if is_ratio else None
+        cf = axs_c[col_idx].contourf(X, Y, Z_masked, cmap=contour_cmap, norm=norm, levels=n_levels)
+        axs_c[col_idx].contour(X, Y, Z_masked, colors='k', linewidths=0.4, levels=n_levels, alpha=0.35)
+        plt.colorbar(cf, ax=axs_c[col_idx], label=clabel)
+        axs_c[col_idx].set_xlabel(xlabel)
+        axs_c[col_idx].set_ylabel(ylabel)
+    fig_c.tight_layout()
+    _save_fig(fig_c, f"{output_prefix}_{suffix}_contour")
+
+
+_VEL_XLABEL = r"$\max\|\mathbf{v}^{\mathrm{des}}\|$ (m/s)"
+_VEL_YLABEL = r"$\max\|\boldsymbol{\omega}^{\mathrm{des}}\|$ (rad/s)"
+_ACC_XLABEL = r"$\max\|\mathbf{a}^{\mathrm{des}}\|$ (m/s$^2$)"
+_ACC_YLABEL = r"$\max\|\dot{\boldsymbol{\omega}}^{\mathrm{des}}\|$ (rad/s$^2$)"
+
+
 def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_bins_lin=20, n_bins_ang=20):
     """3D surface+scatter and contour figures of trajectory RMSE vs peak desired velocity magnitude.
 
@@ -425,110 +499,54 @@ def plot_velocity_error_analysis(data, name, shortname, color, output_prefix, n_
     """
     lin_vel_peak, ang_vel_peak, pos_rmse, ori_rmse = \
         plotting_utils.get_peak_vel_rmse_per_trajectory(data)
-    lin_vel_np = lin_vel_peak.numpy()
-    ang_vel_np = ang_vel_peak.numpy()
-    pos_rmse_np = pos_rmse.numpy()
-    ori_rmse_np = ori_rmse.numpy()
-
-    xlabel = r"$\max\|\mathbf{v}^{\mathrm{des}}\|$ (m/s)"
-    ylabel = r"$\max\|\boldsymbol{\omega}^{\mathrm{des}}\|$ (rad/s)"
-    error_specs = [
-        (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "magma"),
-        (ori_rmse_np, "Orientation RMSE (rad)", "Mean Orientation RMSE (rad)", "magma"),
-    ]
-
-    # --- 3D figure: all N scatter points + binned mean surface ---
-    fig_3d = plt.figure(figsize=(10, 4.5), dpi=300)
-    fig_3d.patch.set_facecolor("white")
-    # fig_3d.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Velocity")
-    for col_idx, (error_np, zlabel, _, _cmap) in enumerate(error_specs):
-        ax = fig_3d.add_subplot(1, 2, col_idx + 1, projection='3d')
-        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_vel_np, ang_vel_np, error_np, n_bins_lin, n_bins_ang)
-        Z_surf = np.pad(Z, ((0, 1), (0, 1)), mode='edge')
-        Z_surf_masked = np.ma.array(Z_surf, mask=np.isnan(Z_surf))
-        ax.scatter(lin_vel_np, ang_vel_np, error_np, alpha=0.3, s=3, c=color)
-        ax.plot_surface(X_edge, Y_edge, Z_surf_masked, alpha=0.65, cmap=_cmap)
-        ax.set_xlabel(xlabel, labelpad=6)
-        ax.set_ylabel(ylabel, labelpad=6)
-        ax.set_zlabel(zlabel, labelpad=6)
-        _style_3d_axes(ax)
-    fig_3d.tight_layout(pad=2.0)
-    fig_3d.subplots_adjust(left=0.04, right=0.96, bottom=0.08, top=0.88, wspace=0.22)
-    _save_fig(fig_3d, f"{output_prefix}_{shortname}_vel_3d", use_tight_bbox=False)
-
-    error_specs = [
-        (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "rainbow"),
-        (ori_rmse_np, "Orientation RMSE (rad)", "Mean Orientation RMSE (rad)", "rainbow"),
-    ]
-
-    # --- Contour figure ---
-    fig_c, axs_c = plt.subplots(1, 2, figsize=(9, 4), dpi=300)
-    # fig_c.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Velocity")
-    n_levels = 20
-    for col_idx, (error_np, _, clabel, cmap) in enumerate(error_specs):
-        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_vel_np, ang_vel_np, error_np, n_bins_lin, n_bins_ang)
-        Z_masked = np.ma.array(Z, mask=np.isnan(Z))
-        cf = axs_c[col_idx].contourf(X, Y, Z_masked, cmap=cmap, levels=n_levels)
-        axs_c[col_idx].contour(X, Y, Z_masked, colors='k', linewidths=0.4, levels=n_levels, alpha=0.35)
-        plt.colorbar(cf, ax=axs_c[col_idx], label=clabel)
-        axs_c[col_idx].set_xlabel(xlabel)
-        axs_c[col_idx].set_ylabel(ylabel)
-    fig_c.tight_layout()
-    _save_fig(fig_c, f"{output_prefix}_{shortname}_vel_contour")
+    _plot_error_vs_desired_grid(
+        lin_vel_peak.numpy(), ang_vel_peak.numpy(), pos_rmse.numpy(), ori_rmse.numpy(),
+        _VEL_XLABEL, _VEL_YLABEL, output_prefix, f"{shortname}_vel", color=color,
+        n_bins_lin=n_bins_lin, n_bins_ang=n_bins_ang,
+    )
 
 
 def plot_acceleration_error_analysis(data, name, shortname, color, output_prefix, n_bins_lin=20, n_bins_ang=20):
     """3D surface+scatter and contour figures of trajectory RMSE vs peak desired acceleration magnitude."""
     lin_acc_peak, ang_acc_peak, pos_rmse, ori_rmse = \
         plotting_utils.get_peak_acc_rmse_per_trajectory(data)
-    lin_acc_np = lin_acc_peak.numpy()
-    ang_acc_np = ang_acc_peak.numpy()
-    pos_rmse_np = pos_rmse.numpy()
-    ori_rmse_np = ori_rmse.numpy()
+    _plot_error_vs_desired_grid(
+        lin_acc_peak.numpy(), ang_acc_peak.numpy(), pos_rmse.numpy(), ori_rmse.numpy(),
+        _ACC_XLABEL, _ACC_YLABEL, output_prefix, f"{shortname}_acc", color=color,
+        n_bins_lin=n_bins_lin, n_bins_ang=n_bins_ang,
+    )
 
-    xlabel = r"$\max\|\mathbf{a}^{\mathrm{des}}\|$ (m/s$^2$)"
-    ylabel = r"$\max\|\dot{\boldsymbol{\omega}}^{\mathrm{des}}\|$ (rad/s$^2$)"
-    error_specs = [
-        (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "magma"),
-        (ori_rmse_np, "Orientation RMSE (rad)", "Mean Orientation RMSE (rad)", "magma"),
-    ]
 
-    fig_3d = plt.figure(figsize=(10, 4.5), dpi=300)
-    fig_3d.patch.set_facecolor("white")
-    # fig_3d.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Acceleration")
-    for col_idx, (error_np, zlabel, _, _cmap) in enumerate(error_specs):
-        ax = fig_3d.add_subplot(1, 2, col_idx + 1, projection='3d')
-        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_acc_np, ang_acc_np, error_np, n_bins_lin, n_bins_ang)
-        Z_surf = np.pad(Z, ((0, 1), (0, 1)), mode='edge')
-        Z_surf_masked = np.ma.array(Z_surf, mask=np.isnan(Z_surf))
-        ax.scatter(lin_acc_np, ang_acc_np, error_np, alpha=0.3, s=3, c=color)
-        ax.plot_surface(X_edge, Y_edge, Z_surf_masked, alpha=0.65, cmap=_cmap)
-        ax.set_xlabel(xlabel, labelpad=6)
-        ax.set_ylabel(ylabel, labelpad=6)
-        ax.set_zlabel(zlabel, labelpad=6)
-        _style_3d_axes(ax)
-    fig_3d.tight_layout(pad=2.0)
-    fig_3d.subplots_adjust(left=0.04, right=0.96, bottom=0.08, top=0.88, wspace=0.22)
-    _save_fig(fig_3d, f"{output_prefix}_{shortname}_acc_3d", use_tight_bbox=False)
+def plot_velocity_error_ratio_analysis(data1, data2, shortname1, shortname2, output_prefix,
+                                        n_bins_lin=20, n_bins_ang=20):
+    """3D surface+scatter and contour figures of the RMSE ratio (controller2 / controller1)
+    vs peak desired velocity magnitude, for exactly two controllers."""
+    lin_vel_peak, ang_vel_peak, pos_rmse_1, ori_rmse_1 = \
+        plotting_utils.get_peak_vel_rmse_per_trajectory(data1)
+    _, _, pos_rmse_2, ori_rmse_2 = plotting_utils.get_peak_vel_rmse_per_trajectory(data2)
+    pos_ratio = (pos_rmse_2 / pos_rmse_1).numpy()
+    ori_ratio = (ori_rmse_2 / ori_rmse_1).numpy()
+    _plot_error_vs_desired_grid(
+        lin_vel_peak.numpy(), ang_vel_peak.numpy(), pos_ratio, ori_ratio,
+        _VEL_XLABEL, _VEL_YLABEL, output_prefix, f"{shortname1}_vs_{shortname2}_vel_ratio",
+        is_ratio=True, n_bins_lin=n_bins_lin, n_bins_ang=n_bins_ang,
+    )
 
-    error_specs = [
-        (pos_rmse_np, "Position RMSE (m)", "Mean Position RMSE (m)", "rainbow"),
-        (ori_rmse_np, "Orientation RMSE (rad)", "Mean Orientation RMSE (rad)", "rainbow"),
-    ]
 
-    fig_c, axs_c = plt.subplots(1, 2, figsize=(9, 4), dpi=300)
-    # fig_c.suptitle(f"{name} — Trajectory RMSE vs Peak Desired Acceleration")
-    n_levels = 20
-    for col_idx, (error_np, _, clabel, cmap) in enumerate(error_specs):
-        X, Y, X_edge, Y_edge, Z = _bin_error_on_velocity_grid(lin_acc_np, ang_acc_np, error_np, n_bins_lin, n_bins_ang)
-        Z_masked = np.ma.array(Z, mask=np.isnan(Z))
-        cf = axs_c[col_idx].contourf(X, Y, Z_masked, cmap=cmap, levels=n_levels)
-        axs_c[col_idx].contour(X, Y, Z_masked, colors='k', linewidths=0.4, levels=n_levels, alpha=0.35)
-        plt.colorbar(cf, ax=axs_c[col_idx], label=clabel)
-        axs_c[col_idx].set_xlabel(xlabel)
-        axs_c[col_idx].set_ylabel(ylabel)
-    fig_c.tight_layout()
-    _save_fig(fig_c, f"{output_prefix}_{shortname}_acc_contour")
+def plot_acceleration_error_ratio_analysis(data1, data2, shortname1, shortname2, output_prefix,
+                                            n_bins_lin=20, n_bins_ang=20):
+    """3D surface+scatter and contour figures of the RMSE ratio (controller2 / controller1)
+    vs peak desired acceleration magnitude, for exactly two controllers."""
+    lin_acc_peak, ang_acc_peak, pos_rmse_1, ori_rmse_1 = \
+        plotting_utils.get_peak_acc_rmse_per_trajectory(data1)
+    _, _, pos_rmse_2, ori_rmse_2 = plotting_utils.get_peak_acc_rmse_per_trajectory(data2)
+    pos_ratio = (pos_rmse_2 / pos_rmse_1).numpy()
+    ori_ratio = (ori_rmse_2 / ori_rmse_1).numpy()
+    _plot_error_vs_desired_grid(
+        lin_acc_peak.numpy(), ang_acc_peak.numpy(), pos_ratio, ori_ratio,
+        _ACC_XLABEL, _ACC_YLABEL, output_prefix, f"{shortname1}_vs_{shortname2}_acc_ratio",
+        is_ratio=True, n_bins_lin=n_bins_lin, n_bins_ang=n_bins_ang,
+    )
 
 
 def _save_fig(fig, output_name, use_tight_bbox=True):
@@ -557,13 +575,21 @@ def gen_separate_layouts(data1, data2, name1, name2, shortname1, shortname2, out
         Patch(facecolor=params["violin_color_2"], edgecolor=params["violin_color_2"], fill=True, label='Orientation'),
     ]
 
-    fig_error, axs_error = plt.subplots(1, 2, figsize=(7, 3.5), dpi=300)
+    fig_error, axs_error = plt.subplots(2, 1, figsize=(3.5, 7), dpi=300)
     plot_error_pos_yaw(data1, data2, name1, name2, data3, name3, axs_error)
-    fig_error.legend(handles=error_legend_elements, loc='lower center', ncol=len(error_legend_elements), bbox_to_anchor=(0.5, -0.02))
-    fig_error.tight_layout(rect=[0, 0.03, 1, 1])
+    n_controllers = 1 + int(has_second) + int(has_third)
+    if n_controllers > 1:
+        # Legend entries stack vertically (ncol=1), so reserve bottom margin proportional to
+        # the number of rows to keep the legend from overlapping the bottom subplot.
+        n_legend_rows = len(error_legend_elements)
+        bottom_margin = 0.05 * n_legend_rows
+        fig_error.legend(handles=error_legend_elements, loc='lower center', ncol=1, bbox_to_anchor=(0.5, 0.0))
+        fig_error.tight_layout(rect=[0, bottom_margin, 1, 1])
+    else:
+        fig_error.tight_layout()
     _save_fig(fig_error, f"{output}_trajectory_tracking")
 
-    # fig_violin, axs_violin = plt.subplots(1, 2, figsize=(3.5, 3.5), dpi=300)
+    # fig_violin, axs_violin = plt.subplots(2, 1, figsize=(3.5, 7), dpi=300)
     # plot_violin_rmse_settling_time(data1, data2, shortname1, shortname2, data3, shortname3, axs_violin)
     # fig_violin.legend(handles=violin_legend_elements, loc='lower center', ncol=2, bbox_to_anchor=(0.5, -0.02))
     # fig_violin.tight_layout(rect=[0, 0.03, 1, 1])
@@ -571,8 +597,11 @@ def gen_separate_layouts(data1, data2, name1, name2, shortname1, shortname2, out
 
     # fig_crash, ax_crash = plt.subplots(1, 1, figsize=(3.5, 3.5), dpi=300)
     # plot_crash_rate_over_time(data1, data2, name1, name2, data3, name3, ax_crash)
-    # fig_crash.legend(handles=error_legend_elements, loc='lower center', ncol=len(error_legend_elements), bbox_to_anchor=(0.5, -0.12))
-    # fig_crash.tight_layout(rect=[0, 0.07, 1, 1])
+    # if n_controllers > 1:
+    #     fig_crash.legend(handles=error_legend_elements, loc='lower center', ncol=len(error_legend_elements), bbox_to_anchor=(0.5, -0.12))
+    #     fig_crash.tight_layout(rect=[0, 0.07, 1, 1])
+    # else:
+    #     fig_crash.tight_layout()
     # _save_fig(fig_crash, f"{output}_crash_rate")
 
     crash_rate_1_final = plotting_utils.get_crash_rate_series(data1)[-1].item()
@@ -585,14 +614,23 @@ def gen_separate_layouts(data1, data2, name1, name2, shortname1, shortname2, out
         print(f"{name3} crash rate at final timestep: {crash_rate_3_final:.6f}")
 
     if vel_analysis:
-        controllers_vel = [(data1, name1, shortname1, params["rl_ee_color"])]
-        if has_second:
-            controllers_vel.append((data2, name2, shortname2, params["gc_color"]))
-        if has_third:
-            controllers_vel.append((data3, name3, shortname3, params["c3_color"]))
-        for d, n, sn, col in controllers_vel:
-            plot_velocity_error_analysis(d, n, sn, col, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang)
-            plot_acceleration_error_analysis(d, n, sn, col, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang)
+        if has_second and not has_third:
+            # Exactly two controllers: plot RMSE ratio (C2/C1) instead of one set per controller.
+            plot_velocity_error_ratio_analysis(
+                data1, data2, shortname1, shortname2, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang
+            )
+            plot_acceleration_error_ratio_analysis(
+                data1, data2, shortname1, shortname2, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang
+            )
+        else:
+            controllers_vel = [(data1, name1, shortname1, params["rl_ee_color"])]
+            if has_second:
+                controllers_vel.append((data2, name2, shortname2, params["gc_color"]))
+            if has_third:
+                controllers_vel.append((data3, name3, shortname3, params["c3_color"]))
+            for d, n, sn, col in controllers_vel:
+                plot_velocity_error_analysis(d, n, sn, col, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang)
+                plot_acceleration_error_analysis(d, n, sn, col, output, n_bins_lin=vel_bins_lin, n_bins_ang=vel_bins_ang)
 
 
 if __name__ == "__main__":
