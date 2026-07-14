@@ -339,7 +339,7 @@ class AerialManipulatorTrajectoryTrackingEnvBaseCfg(DirectRLEnvCfg):
     ki_joint_shoulder:  float = 0.0
     kd_joint_shoulder:  float = 20.0
     i_limit_joint_shoulder: float = 0.0
-    use_shoulder_gravity_comp: bool = True
+    use_shoulder_gravity_comp: bool = False #True
     kp_joint_wrist:     float = 300.0
     ki_joint_wrist:     float = 0.0
     kd_joint_wrist:     float = 20.0
@@ -563,11 +563,15 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
 
     # Motor dynamics always on for CTBR: wrench is routed through first-order
     # rotor speed dynamics so the physics matches real actuator bandwidth.
-    # use_motor_dynamics: bool = True
+    use_motor_dynamics: bool = True
 
     # Randomise end-effector payload mass on every episode reset.
-    # events = EventCfg()
-    events = NoEndEffectorEventCfg()
+    events = EventCfg()
+    # events = NoEndEffectorEventCfg()
+
+    # eval_trajectory = "h" # train on simple hover for now
+    # trajectory_horizon = 0 # for hover case horizon just gives redundant observations
+    eval_trajectory = "fast_lissaajous"
 
     # modified reward scales
     body_pos_radius_start = 1.0
@@ -581,17 +585,17 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
     ee_pos_distance_reward_scale = 10.0 #15.0
 
     ori_radius_start = 1.5
-    ori_radius_curriculum = 150
+    ori_radius_curriculum = 75
     ori_distance_reward_scale = 12.0 #15.0
     ori_error_reward_scale = 0.0 # -0.5
 
     action_joint_norm_reward_scale = 0.0 # 0 bc output is joint positions, not torques
-    previous_action_joint_reward_scale = 0.0
+    previous_action_joint_reward_scale = -0.5
 
 
     # Body-rate scaling: normalised action [-1,1] -> rad/s
-    body_rate_scale_xy: float = 10.0
-    body_rate_scale_z:  float = 2.5
+    body_rate_scale_xy: float = 15.0
+    body_rate_scale_z:  float = 1.5
 
     # INDI / rate-to-accel virtual control (nu)
     kp_bodyrate_xy:    float = 10.0
@@ -602,13 +606,13 @@ class AerialManipulator2DOF_CTBR_EnvCfg(AerialManipulator2DOFTrajectoryTrackingE
 
     # Inner loops run every physics step (sim_rate_hz == inner_loop_rate_hz)
     sim_rate_hz = 100
-    inner_loop_rate_hz = sim_rate_hz
+    inner_loop_rate_hz = 50
     inner_loop_decimation = sim_rate_hz // inner_loop_rate_hz
 
     # Joint PID — joints are continuous [-pi, pi]; wrap_to_pi applied to error
-    kp_joint_shoulder: float = 0.5      # Nm/rad
-    ki_joint_shoulder: float = 0.05     # Nm/(rad*s)
-    kd_joint_shoulder: float = 0.1     # Nm.s/rad
+    kp_joint_shoulder: float = 0.2      # Nm/rad
+    ki_joint_shoulder: float = 0.01     # Nm/(rad*s)
+    kd_joint_shoulder: float = 0.01     # Nm.s/rad
     i_limit_joint_shoulder: float = 5.0 # rad*s (integral state clamp)
     kp_joint_wrist:    float = 1e-2     # Nm/rad
     ki_joint_wrist:    float = 1e-3     # Nm/(rad*s)
@@ -1168,7 +1172,8 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         if self.cfg.num_joints > 0:
             shoulder_pos = self._robot.data.joint_pos[:, self._shoulder_joint_idx]
             shoulder_vel = self._robot.data.joint_vel[:, self._shoulder_joint_idx]
-            shoulder_err = wrap_to_pi(self._actions[:, 4] * self.cfg.joint_pos_scale)
+            shoulder_err = self._actions[:, 4] * self.cfg.joint_pos_scale - shoulder_pos
+            # shoulder_err = wrap_to_pi(self._actions[:, 4] * self.cfg.joint_pos_scale)
             self._joint_pos_err_integral[:, 0] += shoulder_err / self.cfg.inner_loop_rate_hz
             # print(f'[INFO]: shoulder_des, shoulder_pos, {shoulder_des}, {shoulder_pos}')
             if self.cfg.i_limit_joint_shoulder > 0.0:
@@ -1195,8 +1200,10 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
             self._joint_torques[:, self._shoulder_joint_idx] = shoulder_tau
 
         if self.cfg.num_joints > 1:
+            wrist_pos = self._robot.data.joint_pos[:, self._wrist_joint_idx]
             wrist_vel = self._robot.data.joint_vel[:, self._wrist_joint_idx]
-            wrist_err = wrap_to_pi(self._actions[:, 5] * self.cfg.joint_pos_scale)
+            wrist_err = self._actions[:, 5] * self.cfg.joint_pos_scale - wrist_pos
+            # wrist_err = wrap_to_pi(self._actions[:, 5] * self.cfg.joint_pos_scale)
             self._joint_pos_err_integral[:, 1] += wrist_err / self.cfg.inner_loop_rate_hz
             # print(f'[INFO]: wrist_des, wrist_pos, {wrist_des}, {wrist_pos}')
             if self.cfg.i_limit_joint_wrist > 0.0:
@@ -1654,13 +1661,13 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
         else:
             previous_velocities = torch.zeros(self.num_envs, 0, device=self.device)
 
-        if self.cfg.control_mode == "CTBR":
-            # explicitly specify joint angles
-            ee_to_body_ori_representation  = torch.cat([
-                shoulder_joint_pos,
-                wrist_joint_pos,
-            ], dim=-1)
-            ee_to_body_ori_representation /= self.cfg.joint_pos_scale
+        # if self.cfg.control_mode == "CTBR":
+        #     # explicitly specify joint angles
+        #     ee_to_body_ori_representation  = torch.cat([
+        #         shoulder_joint_pos,
+        #         wrist_joint_pos,
+        #     ], dim=-1)
+        #     ee_to_body_ori_representation /= self.cfg.joint_pos_scale
 
         obs = torch.cat(
             [
@@ -1987,13 +1994,13 @@ class AerialManipulatorTrajectoryTrackingEnv(DirectRLEnv):
 
         action_delta = self._actions - self._previous_actions
         # for CTBR control mode, joint actions are desired positions, so for calculating the delta, take into consideration the [-pi, pi] wrapping
-        if self.cfg.control_mode == "CTBR":
-            # convert[-1, 1] to actual angles
-            joint_action_delta = action_delta[:, -2:] * self.cfg.joint_pos_scale
-            joint_action_delta = wrap_to_pi(joint_action_delta) 
-            # rescale to [-1, 1]
-            joint_action_delta /= self.cfg.joint_pos_scale
-            action_delta[:, -2:] = joint_action_delta
+        # if self.cfg.control_mode == "CTBR":
+        #     # convert[-1, 1] to actual angles
+        #     joint_action_delta = action_delta[:, -2:] * self.cfg.joint_pos_scale
+        #     joint_action_delta = wrap_to_pi(joint_action_delta) 
+        #     # rescale to [-1, 1]
+        #     joint_action_delta /= self.cfg.joint_pos_scale
+        #     action_delta[:, -2:] = joint_action_delta
 
         action_delta_error = torch.norm(action_delta, dim=1)
         action_delta_prop_error = torch.norm(action_delta[:, :4], dim=1)
