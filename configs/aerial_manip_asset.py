@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.actuators import ImplicitActuatorCfg, IdealPDActuatorCfg
-from omni.isaac.lab.assets import ArticulationCfg, RigidObjectCfg
+import isaaclab.sim as sim_utils
+from isaaclab.actuators import ImplicitActuatorCfg, IdealPDActuatorCfg
+from isaaclab.assets import ArticulationCfg, RigidObjectCfg
 from utils.assets import MODELS_PATH
 
-from omni.isaac.lab.sim.spawners.shapes import SphereCfg, spawn_sphere
-from omni.isaac.lab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg
+from isaaclab.sim.spawners.shapes import SphereCfg, spawn_sphere
+from isaaclab.sim.spawners.materials import VisualMaterialCfg, PreviewSurfaceCfg
 
 
 AERIAL_MANIPULATOR_CFG = ArticulationCfg(
@@ -644,7 +644,7 @@ AERIAL_MANIPULATOR_0DOF_DEBUG_BALL_CATCHING_CFG = ArticulationCfg(
 BALL_CFG = RigidObjectCfg(
     prim_path="{ENV_REGEX_NS}/Ball",
     spawn = SphereCfg(
-        radius=0.04,
+        radius=0.02,
         visual_material=PreviewSurfaceCfg(diffuse_color = (1.0, 0.0, 0.0)),
         rigid_props=sim_utils.RigidBodyPropertiesCfg(
             disable_gravity=False,
@@ -796,6 +796,32 @@ CRAZYFLIE_BRUSHLESS_CFG = ArticulationCfg(
             damping=0.0,
         ),
     },
+)
+
+BALL_CFG = RigidObjectCfg(
+    prim_path="{ENV_REGEX_NS}/Ball",
+        spawn = SphereCfg(
+        radius=0.04,
+        visual_material=PreviewSurfaceCfg(diffuse_color = (1.0, 0.0, 0.0)),
+        rigid_props=sim_utils.RigidBodyPropertiesCfg(
+            disable_gravity=False,
+            max_depenetration_velocity=10.0,
+            enable_gyroscopic_forces=True,
+        ),
+        collision_props=sim_utils.CollisionPropertiesCfg(
+            collision_enabled=True,
+            contact_offset=0.05,
+        ),
+        mass_props=sim_utils.MassPropertiesCfg(
+            mass=0.001,
+        ),
+        physics_material=sim_utils.RigidBodyMaterialCfg(
+            restitution=0.9,
+            static_friction=20.0,
+            dynamic_friction=20.0,
+        ),
+    ),
+    collision_group=0,
 )
 
 CRAZYFLIE_BRUSHLESS_MANIPULATOR_CFG = ArticulationCfg(

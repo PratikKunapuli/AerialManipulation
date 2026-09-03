@@ -4,7 +4,7 @@ from torch.distributions.normal import Normal
 import numpy as np
 from typing import Tuple
 
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 from utils.math_utilities import vee_map, yaw_from_quat, quat_from_yaw, matrix_log
 import utils.flatness_utilities as flat_utils
 import utils.math_utilities as math_utils
@@ -13,7 +13,7 @@ import utils.math_utilities as math_utils
 @torch.jit.script
 def get_point_state_from_ee_transform_w(ee_pos_w, ee_ori_quat_w, ee_vel_w, ee_omega_w, point_pos_ee_frame):
     point_pos_w, _ = isaac_math_utils.combine_frame_transforms(ee_pos_w, ee_ori_quat_w, point_pos_ee_frame)
-    point_vel_w = ee_vel_w + torch.cross(ee_omega_w, isaac_math_utils.quat_rotate(ee_ori_quat_w, point_pos_ee_frame), dim=1)
+    point_vel_w = ee_vel_w + torch.cross(ee_omega_w, isaac_math_utils.quat_apply(ee_ori_quat_w, point_pos_ee_frame), dim=1)
 
     
     return point_pos_w, point_vel_w
@@ -174,7 +174,7 @@ class DecoupledController():
         if self.feed_forward:
             desired_pos, ff_vel, ff_acc, ff_jerk, ff_snap, ff_yaw, ff_yaw_dot, ff_yaw_ddot = compute_ff_terms(obs, self.policy_dt)
 
-            quad_omega = isaac_math_utils.quat_rotate(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega) # Rotate into body frame
+            quad_omega = isaac_math_utils.quat_apply(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega) # Rotate into body frame
             gravity_vec = self.gravity.tile(com_pos.shape[0], 1) # (N, 3)
             Id_3 = torch.eye(3, device=self.device).unsqueeze(0).tile(com_pos.shape[0], 1, 1) # (N, 3, 3)
         
@@ -238,7 +238,7 @@ class DecoupledController():
         else: # Not using feed forward - no future positions
             ff_vel = torch.zeros_like(com_vel)
             ff_acc = torch.zeros_like(com_vel)
-            com_omega = isaac_math_utils.quat_rotate(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega)
+            com_omega = isaac_math_utils.quat_apply(isaac_math_utils.quat_conjugate(com_ori_quat), com_omega)
 
             pos_error = com_pos - desired_pos
             vel_error = com_vel - ff_vel

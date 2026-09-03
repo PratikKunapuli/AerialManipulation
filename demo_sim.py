@@ -1,5 +1,5 @@
 # These imports need to go first
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 import argparse # Used for Isaac
 parser = argparse.ArgumentParser(description="Run demo with Isaac Sim")
 parser.add_argument("--time_step", type=float, default=1.0 / 60.0, help="Time step for the simulation")
@@ -16,15 +16,15 @@ from configs.aerial_manip_asset import AERIAL_MANIPULATOR_CFG, AERIAL_MANIPULATO
 
 # Isaac Lab/Isaac Sim imports
 # import isaacsim
-import omni.isaac.lab.sim as sim_utils
-from omni.isaac.lab.sim import SimulationContext
-from omni.isaac.lab.assets import RigidObject, RigidObjectCfg
-from omni.isaac.lab.assets import Articulation
-from omni.isaac.lab.markers import VisualizationMarkers, VisualizationMarkersCfg
-from omni.isaac.lab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
-from omni.isaac.lab.utils.math import subtract_frame_transforms, quat_inv
+import isaaclab.sim as sim_utils
+from isaaclab.sim import SimulationContext
+from isaaclab.assets import RigidObject, RigidObjectCfg
+from isaaclab.assets import Articulation
+from isaaclab.markers import VisualizationMarkers, VisualizationMarkersCfg
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
+from isaaclab.utils.math import subtract_frame_transforms, quat_inv
 
-from omni.isaac.lab_assets import CRAZYFLIE_CFG
+from isaaclab_assets import CRAZYFLIE_CFG
 
 
 import tyro # used for everything else

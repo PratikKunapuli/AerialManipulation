@@ -32,7 +32,7 @@ def export_model_to_c(model, export_dir, policy_rate, use_previous_action=False,
         for name, param in model.named_parameters():
             print(f"  {name}: {param.shape}")
             # Only process actor parameters, skip critic and std
-            if name.startswith('actor.') and ('weight' in name or 'bias' in name):
+            if 'weight' in name or 'bias' in name:
                 actor_params[name] = param.cpu().numpy()
                 print(f"    -> Selected for export")
         
@@ -45,7 +45,7 @@ def export_model_to_c(model, export_dir, policy_rate, use_previous_action=False,
         
         for name, param in actor_params.items():
             # Extract layer number from name (e.g., "actor.0.weight" -> 0)
-            layer_num = int(name.split('.')[1])
+            layer_num = int(name.split('.')[-2])
             
             if 'weight' in name:
                 weight_layers[layer_num] = param

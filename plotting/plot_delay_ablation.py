@@ -15,7 +15,7 @@ from matplotlib.patches import Patch
 from matplotlib.ticker import (AutoMinorLocator, MultipleLocator)
 
 
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 import utils.math_utilities as math_utils
 
 

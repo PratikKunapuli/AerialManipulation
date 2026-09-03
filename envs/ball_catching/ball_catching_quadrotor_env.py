@@ -63,7 +63,30 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
     # env
     episode_length_s = 10.0
     action_space = 4
-    observation_space = 17
+    observation_space = 18
+
+    # Catch tolerance curriculum
+    catch_tolerance_min: float = 0.08       # tightest it will ever get
+    catch_tolerance_max: float = 0.50       # starts here
+    catch_curriculum_tighten_rate: float = 0.005   # subtract per curriculum step
+    catch_curriculum_loosen_rate: float = 0.002    # add per curriculum step
+    catch_curriculum_tighten_threshold: float = 0.45  # success rate needed to tighten
+    catch_curriculum_loosen_threshold: float = 0.20   # success rate that triggers loosening
+    catch_curriculum_update_interval: int = 50        # update every N iterations
+
+    catch_tolerance = 0.50
+    
+    # --- Time-to-catch curriculum ---
+    time_to_catch_max: float = 1.5       # starts here, tightens over training
+    time_to_catch_min: float = 0.60       # tightest it will ever get
+    time_to_catch_tighten_rate: float = 0.02
+    time_to_catch_tighten_threshold: float = 0.40  # success rate needed to tighten
+    time_to_catch_loosen_threshold: float = 0.15   # success rate that triggers loosening
+    time_to_catch_update_interval: int = 50        # update every N iterations
+
+    # --- Continuous yaw alignment ---
+    yaw_continuous_reward_scale: float = -1.5
+
     state_space = 0
     debug_vis = True
     sim_rate_hz = 1000
@@ -172,9 +195,11 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
     pos_fine_radius = 0.1
     pos_radius_curriculum = 50_000_000
     pos_error_reward_scale= 0.0
+    catch_miss_penalty_scale = -8.0  # <--- NEW: Massive penalty for missing
+    catch_success_bonus_scale = 5.0
+    yaw_catch_penalty_scale = -2.0
     lin_vel_reward_scale = -0.05
     ang_vel_reward_scale = -0.01
-    # yaw_error_reward_scale = -2.0
     ori_error_reward_scale = -2.0
     previous_thrust_reward_scale = -0.1
     previous_attitude_reward_scale = -0.1
@@ -182,7 +207,7 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
     action_vec_norm_reward_scale = [ 0.0, 0.0, 0.0, 0.0] # [thrust, roll, pitch, yaw]
     action_norm_reward_scale = 0.0
     stay_alive_reward = 0.0
-    crash_penalty = 0.0
+    crash_penalty = -50.0
     scale_reward_with_time = True
     # reward / history
     rotorpy_obs = False
@@ -260,7 +285,7 @@ class QuadrotorEnvCfg(DirectRLEnvCfg):
     joint_vel_reward_scale = 0.0 # -0.01
     previous_action_norm_reward_scale = 0.0 # -0.01
     yaw_distance_reward_scale = 0.0 # -0.01
-    yaw_radius = 0.2 
+    yaw_radius = 0.2
     yaw_smooth_transition_scale = 0.0
     square_reward_errors = False
     square_pos_error = True
@@ -568,6 +593,13 @@ class QuadrotorEnv(DirectRLEnv):
         self._action_queue = torch.tensor([self._hover_thrust, 0.0, 0.0, 0.0], device=self.device).tile((self.cfg.control_latency_steps+1, self.num_envs, 1)) # for control latency
         self._control_latency_steps = torch.ones(self.num_envs, dtype=torch.long, device=self.device) * self.cfg.control_latency_steps
 
+        # --- NEW: Time-to-catch and success tracking buffers ---
+        self.time_to_catch = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.is_success = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
+        self.has_evaluated_catch = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self._catch_curriculum_step = 0
+        self._ttc_curriculum_step = 0
+
         self._action_history = torch.zeros(self.num_envs, self.cfg.action_history_length, self.cfg.action_space, device=self.device)
         self._state_history = torch.zeros(self.num_envs, self.cfg.state_history_length, 3, device=self.device)
 
@@ -606,8 +638,6 @@ class QuadrotorEnv(DirectRLEnv):
 
         self._time = torch.zeros(self.num_envs, 1, device=self.device)
         self.pos_radius_start = self.cfg.pos_radius
-
-        
 
         # Things necessary for motor dynamics
         r2o2 = math.sqrt(2.0) / 2.0
@@ -667,6 +697,11 @@ class QuadrotorEnv(DirectRLEnv):
                 "action_norm",
                 "crash_penalty",
                 "stay_alive",
+                "catch_miss_penalty",
+                "catch_success_bonus",
+                "early_arrival",
+                "yaw_catch_penalty",
+                'yaw_continuous'
             ]
         }
 
@@ -845,6 +880,9 @@ class QuadrotorEnv(DirectRLEnv):
         return cmd_moment
 
     def _pre_physics_step(self, actions: torch.Tensor):
+
+        # Decrement the timer by the policy step time, bounding it at zero
+        self.time_to_catch = torch.clamp(self.time_to_catch - self.step_dt, min=0.0)
         # self._actions = actions.clone().clamp(-1.0, 1.0)
         self._action_queue = torch.roll(self._action_queue, shifts=-1, dims=0)
         self._action_queue[-1] = actions.clone().clamp(-1.0, 1.0)
@@ -973,6 +1011,68 @@ class QuadrotorEnv(DirectRLEnv):
             # half the pos radius every pos_radius_curriculum timesteps
             # self.cfg.pos_radius = 0.8 * (0.25 ** (total_timesteps // self.cfg.pos_radius_curriculum))
             self.cfg.pos_radius = self.pos_radius_start * (0.5 ** (total_timesteps // self.cfg.pos_radius_curriculum))
+            
+    def _update_catch_tolerance_curriculum(self) -> None:
+        """Tighten or loosen catch_tolerance based on rolling success rate."""
+        self._catch_curriculum_step += 1
+        if self._catch_curriculum_step % self.cfg.catch_curriculum_update_interval != 0:
+            return
+
+        success_rate = self.is_success.mean().item()
+
+        if success_rate >= self.cfg.catch_curriculum_tighten_threshold:
+            new_tol = max(
+                self.cfg.catch_tolerance_min,
+                self.cfg.catch_tolerance - self.cfg.catch_curriculum_tighten_rate
+            )
+            if new_tol != self.cfg.catch_tolerance:
+                self.get_logger().info(
+                    f"[CatchCurriculum] Tightening tolerance: "
+                    f"{self.cfg.catch_tolerance:.4f} -> {new_tol:.4f} "
+                    f"(success_rate={success_rate:.3f})"
+                ) if hasattr(self, 'get_logger') else None
+            self.cfg.catch_tolerance = new_tol
+
+        elif success_rate < self.cfg.catch_curriculum_loosen_threshold:
+            new_tol = min(
+                self.cfg.catch_tolerance_max,
+                self.cfg.catch_tolerance + self.cfg.catch_curriculum_loosen_rate
+            )
+            self.cfg.catch_tolerance = new_tol
+    def _update_time_to_catch_curriculum(self) -> None:
+        """Tighten or loosen time_to_catch_max based on rolling success rate."""
+        self._ttc_curriculum_step += 1
+        if self._ttc_curriculum_step % self.cfg.time_to_catch_update_interval != 0:
+            return
+
+        success_rate = self.is_success.mean().item()
+
+        if success_rate >= self.cfg.time_to_catch_tighten_threshold:
+            new_ttc = max(
+                self.cfg.time_to_catch_min,
+                self.cfg.time_to_catch_max - self.cfg.time_to_catch_tighten_rate
+            )
+            if new_ttc != self.cfg.time_to_catch_max:
+                self.get_logger().info(
+                    f"[TTCCurriculum] Tightening time_to_catch: "
+                    f"{self.cfg.time_to_catch_max:.3f}s -> {new_ttc:.3f}s "
+                    f"(success_rate={success_rate:.3f})"
+                ) if hasattr(self, 'get_logger') else None
+            self.cfg.time_to_catch_max = new_ttc
+
+
+        elif success_rate < self.cfg.time_to_catch_loosen_threshold:
+            new_ttc = min(
+                1.5,
+                self.cfg.time_to_catch_max + self.cfg.time_to_catch_tighten_rate
+            )
+            if new_ttc != self.cfg.time_to_catch_max:
+                self.get_logger().info(
+                    f"[TTCCurriculum] Loosening time_to_catch: "
+                    f"{self.cfg.time_to_catch_max:.3f}s -> {new_ttc:.3f}s "
+                    f"(success_rate={success_rate:.3f})"
+                ) if hasattr(self, 'get_logger') else None
+            self.cfg.time_to_catch_max = new_ttc
 
     def update_goal_state(self):
         # env_ids = (self.episode_length_buf % int(self.cfg.traj_update_dt*self.cfg.policy_rate_hz)== 0).nonzero(as_tuple=False)
@@ -1064,6 +1164,30 @@ class QuadrotorEnv(DirectRLEnv):
         
         base_pos_w, base_ori_w, lin_vel_w, ang_vel_w = self.get_frame_state_from_task(self.cfg.task_body)
         goal_pos_w, goal_ori_w = self.get_goal_state_from_task(self.cfg.goal_body)
+
+        # ====================================================================
+        # ADDED: Sim-to-Real Tracker Convergence Noise (15cm -> 0cm)
+        # ====================================================================
+        if not self.cfg.eval_mode:
+            # 1. Lazily initialize a persistent drift vector so the noise is smooth, not jerky
+            if not hasattr(self, '_tracker_drift'):
+                self._tracker_drift = torch.zeros_like(goal_pos_w)
+                
+            # 2. Smooth random walk (Exponential Moving Average)
+            # This causes the "predicted point" to wander smoothly over time
+            self._tracker_drift = 0.95 * self._tracker_drift + 0.05 * torch.randn_like(goal_pos_w)
+            
+            # 3. Distance-based decay envelope WITH 10cm DEADZONE
+            # If distance < 10cm, envelope is exactly 0.0. Ramps up to full 15cm at 1.5m.
+            dist_to_goal = torch.linalg.norm(goal_pos_w - base_pos_w, dim=1, keepdim=True)
+            noise_envelope = torch.clamp((dist_to_goal - 0.10) / 1.5, 0.0, 1.0) * 0.15
+            
+            # 4. Apply the noise
+            drift_norm = torch.linalg.norm(self._tracker_drift, dim=1, keepdim=True) + 1e-6
+            actual_noise = (self._tracker_drift / drift_norm) * noise_envelope
+            
+            goal_pos_w = goal_pos_w + actual_noise
+        # ====================================================================
 
 
         # Find the error of the end-effector to the desired position and orientation
@@ -1240,7 +1364,8 @@ class QuadrotorEnv(DirectRLEnv):
                     previous_actions,                           # (num_envs, 4)
                     action_history,                             # (num_envs, 4 * action_history_length) if action_history_length > 1, else 0
                     future_pos_error_b.flatten(-2, -1),         # (num_envs, horizon * 3)
-                    future_ori_error_b.flatten(-2, -1)          # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                    future_ori_error_b.flatten(-2, -1),         # (num_envs, horizon * 4) if use_yaw_representation_for_trajectory, else (num_envs, horizon, 1)
+                    self.time_to_catch.unsqueeze(-1)            # [N, 1] <--- NEW
                 ],
                 dim=-1                                          # (num_envs, 22 + 7*horizon)
             )
@@ -1320,6 +1445,7 @@ class QuadrotorEnv(DirectRLEnv):
                     self._desired_ori_w,                        # (num_envs, 4) [33-37] [29-33]
                     pos_traj,
                     yaw_traj,
+                    self.time_to_catch.unsqueeze(-1),           # (num_envs, 1) [48] 
                 ],
                 dim=-1                                          # (num_envs, 18)
             )
@@ -1420,12 +1546,68 @@ class QuadrotorEnv(DirectRLEnv):
         hover_lin = torch.exp(-(lin_vel_error ** 2) / self.cfg.hover_lin_denom)
         hover_ang = torch.exp(-(ang_vel_error ** 2) / self.cfg.hover_ang_denom)
         hover_ori = torch.exp(-(ori_error ** 2) / self.cfg.hover_ori_denom)
-        hover_quality = pos_fine_distance * hover_lin * hover_ang * hover_ori
+        at_target_gate = (pos_error < self.cfg.pos_fine_radius * 3.0).float()
+        hover_quality = pos_fine_distance * hover_lin * hover_ang * at_target_gate
 
         if self.cfg.scale_reward_with_time:
             time_scale = self.step_dt
         else:
             time_scale = 1.0
+
+        # time_weight is 0 when time is high, and 1.0 when time runs out
+        # Narrowed the window so the drone doesn't hover early
+        time_weight = torch.exp(-self.time_to_catch / 0.25)
+
+        # --- UNIFIED CATCH LOGIC ---
+        # 1. Define the exact moment the "catch event" is evaluated. 
+        # Evaluate it at 0.02s before 0.0, to guarantee it registers in the buffer before the environment resets on timeout.
+        catch_event_triggered = (self.time_to_catch <= 0.02)
+        
+        # 2. ONLY evaluate if we haven't already evaluated this episode
+        evaluate_catch_now = torch.logical_and(catch_event_triggered, torch.logical_not(self.has_evaluated_catch))
+        
+        missed_catch = pos_error > self.cfg.catch_tolerance
+        caught_ball = pos_error <= self.cfg.catch_tolerance
+        
+        # Cap the miss distance at 2.0 meters to prevent gradient explosion
+        capped_miss_distance = torch.clamp(pos_error, max=2.0)
+        
+        # 3. Apply Penalty (Only when evaluate_catch_now is True AND it missed)
+        catch_miss_penalty = torch.where(
+            torch.logical_and(evaluate_catch_now, missed_catch),
+            capped_miss_distance, 
+            torch.zeros_like(pos_error)
+        )
+
+        # 4. Apply Bonus (Only when evaluate_catch_now is True AND it caught it)
+        # Using a massive +50.0 bonus
+        catch_success_bonus = torch.where(
+            torch.logical_and(evaluate_catch_now, caught_ball),
+            torch.ones_like(pos_error),  
+            torch.zeros_like(pos_error)
+        )
+        
+        # 5. Yaw mismatch penalty
+        current_yaw = yaw_from_quat(base_ori_w)
+        goal_yaw = yaw_from_quat(goal_ori_w)
+        yaw_err_at_catch = torch.abs(wrap_to_pi(current_yaw - goal_yaw))
+
+        # Penalty: fired only when evaluate_catch_now is True, regardless of success/miss
+        yaw_catch_penalty = torch.where(evaluate_catch_now, yaw_err_at_catch, torch.zeros_like(pos_error))
+        
+        # Continuous yaw alignment — active from step 1, no proximity gate
+        yaw_error_continuous = torch.abs(wrap_to_pi(current_yaw - goal_yaw))
+
+        # 6. Track metric using the same logic
+        self.is_success = torch.where(
+            torch.logical_and(evaluate_catch_now, caught_ball),
+            torch.ones_like(self.is_success),
+            self.is_success
+        )
+        
+        # 7. Mark these environments as evaluated so they don't get the reward/penalty again
+        self.has_evaluated_catch = torch.logical_or(self.has_evaluated_catch, evaluate_catch_now)
+        # -------------------------------------
 
         if self.cfg.rotorpy_reward:
             rewards = {
@@ -1452,13 +1634,23 @@ class QuadrotorEnv(DirectRLEnv):
                 "action_norm": action_norm_error * self.cfg.action_norm_reward_scale * (0.25 + self.cfg.action_norm_near_mix * near_goal_weight) * time_scale,
                 "crash_penalty": self.reset_terminated.float() * crash_penalty_time * time_scale,
                 "stay_alive": (self.cfg.stay_alive_reward + self.cfg.stay_alive_hover_mix * hover_quality) * time_scale,
+                # --- NEW: Add the penalty to the dictionary ---
+                "catch_miss_penalty": catch_miss_penalty * self.cfg.catch_miss_penalty_scale,
+                "catch_success_bonus": catch_success_bonus * self.cfg.catch_success_bonus_scale,
+                # ADD this new term to the rewards dict:
+                "early_arrival": pos_fine_distance * time_weight * 2.0 * time_scale,
+                # High when drone is at target AND timer still has time left — rewards arriving early, not late-dashing
+                "yaw_catch_penalty" : yaw_catch_penalty * self.cfg.yaw_catch_penalty_scale,
+                "yaw_continuous" : yaw_error_continuous * self.cfg.yaw_continuous_reward_scale * (1 - near_goal_weight) * time_scale,
             }
 
         reward = torch.sum(torch.stack(list(rewards.values())), dim=0)
 
         for key, value in rewards.items():
             self._episode_sums[key] += value
-
+        
+        self._update_catch_tolerance_curriculum()
+        self._update_time_to_catch_curriculum()
         return reward
 
 
@@ -1524,6 +1716,9 @@ class QuadrotorEnv(DirectRLEnv):
         extras["Metrics/final_distance_to_goal"] = final_distance_to_goal.item()
         extras["Metrics/final_yaw_error_to_goal"] = final_yaw_error.item()
         extras["Metrics/pos_radius"] = self.cfg.pos_radius
+        extras['Metrics/catch_tolerance'] = self.cfg.catch_tolerance
+        extras['Metrics/time_to_catch_max'] = self.cfg.time_to_catch_max
+        extras["Metrics/catch_success_rate"] = self.is_success[env_ids].mean().item()
         self.extras["log"].update(extras)
 
         self._robot.reset(env_ids)
@@ -1533,6 +1728,15 @@ class QuadrotorEnv(DirectRLEnv):
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
         elif self.cfg.eval_mode:
             self.episode_length_buf[env_ids] = 0
+
+        # --- NEW: Reset timer and success flags for the new episode ---
+        # Give the drone a random flight time between 0.5s and 1.5s
+        ttc_low = max(self.cfg.time_to_catch_min, self.cfg.time_to_catch_max - 0.30)
+        self.time_to_catch[env_ids] = torch.empty(len(env_ids), device=self.device).uniform_(
+    	    ttc_low, self.cfg.time_to_catch_max
+	    )
+        self.is_success[env_ids] = 0.0
+        self.has_evaluated_catch[env_ids] = False
 
 
         self._actions[env_ids] = 0.0

@@ -1,5 +1,5 @@
 import torch
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 from typing import Tuple
 
 def exp_so3(S):
@@ -68,8 +68,8 @@ def yaw_error_from_quats(q1: torch.Tensor, q2: torch.Tensor, dof:int) -> torch.T
 
     
     #Find vector "b2" that is the y-axis of the rotated frame
-    b1 = isaac_math_utils.quat_rotate(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
-    b2 = isaac_math_utils.quat_rotate(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
+    b1 = isaac_math_utils.quat_apply(q1, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q1.shape[0], 1)))
+    b2 = isaac_math_utils.quat_apply(q2, torch.tensor([[0.0, 1.0, 0.0]], device=q1.device).tile((q2.shape[0], 1)))
 
     if dof == 0:
         b1[:,2] = 0.0
@@ -123,7 +123,7 @@ def compute_desired_pose_from_transform(
 
     # Rotate the y-axis vector by the goal orientations
     y_axis = torch.tensor([0.0, 1.0, 0.0], device=goal_ori_w.device).unsqueeze(0).expand(batch_size, -1)
-    b2 = isaac_math_utils.quat_rotate(goal_ori_w, y_axis)
+    b2 = isaac_math_utils.quat_apply(goal_ori_w, y_axis)
 
     # Set the z-component to zero if num_joints == 0
     if num_joints == 0:

@@ -2,7 +2,7 @@
 import argparse
 import sys
 # from isaacsim import SimulationApp
-from omni.isaac.lab.app import AppLauncher
+from isaaclab.app import AppLauncher
 
 
 parser = argparse.ArgumentParser(description="Run demo with Isaac Sim")
@@ -34,7 +34,7 @@ sys.argv = [sys.argv[0]] + hydra_args
 app_launcher = AppLauncher(args_cli)
 simulation_app = app_launcher.app
 
-from omni.isaac.lab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
+from isaac.lab.envs import DirectRLEnvCfg, ManagerBasedRLEnvCfg
 from omni.isaac.lab_tasks.utils.hydra import hydra_task_config
 
 from omni.isaac.lab_tasks.utils import parse_env_cfg

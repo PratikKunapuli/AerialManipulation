@@ -17,7 +17,7 @@ rc('xtick', labelsize=8)
 sns.set_context("paper")
 sns.set_theme()
 
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 
 import math_utilities as math_utils
 

@@ -1,5 +1,5 @@
 # Training Policies
-The script `train_rslrl.py` is used to train a policy with PPO implemened in the RSL-RL library. 
+The script `train_rslrl.py` is used to train a policy with PPO implemented in the RSL-RL library. 
 - The task must be specified with `--task {TASK_NAME}`
 - `--num_envs` environments will be simulated in parallel
 - The experiment name must be specified with `--experiment_name {EXP_NAME}` which is where the model checkpoints will be saved (`./logs/rsl_rl/EXP_NAME/RUN_NAME`). 

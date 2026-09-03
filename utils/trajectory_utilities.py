@@ -1,5 +1,5 @@
 import torch
-import omni.isaac.lab.utils.math as isaac_math_utils
+import isaaclab.utils.math as isaac_math_utils
 from typing import Tuple
 
 @torch.jit.script
@@ -268,7 +268,7 @@ def eval_random_walk(pos_init:torch.Tensor, vel_init:torch.Tensor, acc_coeffs: t
         # Compute the new velocity and position
         # acc_b = torch.randn((n_envs, 3), device=pos.device) * acc_coeffs
         acc_b = acc_coeffs
-        acc_w = isaac_math_utils.quat_rotate(ori, acc_b)
+        acc_w = isaac_math_utils.quat_apply(ori, acc_b)
         # print(acc_w)
         vel += acc_w * step_size
         pos += vel * step_size
